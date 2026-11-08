@@ -1,48 +1,5 @@
 # Subject-Independent Evaluation of Mamba for Parkinson's Disease Detection from Gait Signals
 
-Anonymous research artifact for binary gait classification with Mamba, LSTM and
-GRU. This release preserves **existing results and historical source**, and adds
-an independently written filename/split audit and a static checkpoint inspector.
-It is **not an exact training reproduction**, a new benchmark, or clinical software.
-No training or new predictive results were produced for this artifact.
-
-## Anonymous TMLR manuscript and Overleaf
-
-Upload **[paper/main.tex](paper/main.tex)** and the entire
-**[paper/figures/](paper/figures/)** directory to an empty Overleaf project. Select
-pdfLaTeX and set the main document to `main.tex`. The folder contains only this
-TeX file and three figure assets: a newly drawn vector architecture and the two
-original loss plots. Bibliography entries and the unmodified official TMLR style
-are embedded in the TeX source; no separate `.bib` or `.sty` upload is required.
-The style is generated automatically at compilation. Keep the default anonymous
-submission mode, not the `accepted` or `preprint` option.
-
-**Before submission**, create the anonymous repository mirror and insert its
-actual tested URL into `\AnonymousCodeURL` in the TeX preamble. The current draft
-prints a visible placeholder. No anonymous mirror has been created and no URL
-has been invented. Do not put an identifying GitHub address in that field.
-Although content and commit authorship are anonymous, an ordinary GitHub account
-URL is not itself anonymous. Check mirror settings, visible files, external links,
-and expiry/redirect behavior before sharing it with reviewers.
-
-The manuscript is a bounded empirical/audit draft, not a claim of being the only
-subject-independent method. It keeps missing cross-validation, unmatched sample
-supports, and other provenance limits explicit. Confirm original-work eligibility
-and required human authorship/ethics information separately in the submission
-system. Nothing has been submitted to a journal.
-
-Optional figure regeneration uses [tools/make_figures.py](tools/make_figures.py)
-and [requirements-figures.txt](requirements-figures.txt). Regenerating the
-architecture requires no training data. Original loss-image arguments are
-optional; when provided, decoded pixels are verified unchanged and image metadata
-is removed. The architecture is a documented-design schematic, not an exact
-reconstruction of the historical forward pass.
-
-The embedded official template comes from `JmlrOrg/tmlr-style-file` revision
-`7bf90efe3a0debbba703c05c43f3ff7e4d4a2992`. Its Apache-2.0 license is provided in
-[LICENSE-TMLR.txt](LICENSE-TMLR.txt); this license applies to the third-party
-template, not automatically to the original experiment code or manuscript.
-
 ## Existing results
 
 The three result files are unmodified copies of the original saved reports.
