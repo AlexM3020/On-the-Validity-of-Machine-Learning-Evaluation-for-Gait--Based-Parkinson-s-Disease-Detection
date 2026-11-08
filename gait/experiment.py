@@ -1,4 +1,4 @@
-"""Training, checkpoint evaluation, and partition provenance for gait models."""
+"""Mamba training, checkpoint evaluation, and participant provenance."""
 
 import argparse
 import hashlib
@@ -107,10 +107,9 @@ def plot_history(output, history):
 
 
 def parser():
-    result = argparse.ArgumentParser(description="Subject-independent gait classification")
+    result = argparse.ArgumentParser(description="Subject-independent Mamba gait classification")
     result.add_argument("--data-dir", type=Path, required=True)
     result.add_argument("--output-dir", type=Path, required=True)
-    result.add_argument("--model", choices=["mamba", "lstm", "gru"], default="mamba")
     result.add_argument("--seq-len", type=int, default=2000)
     result.add_argument("--channels", type=int, nargs="+", default=list(range(1, 19)),
                         help="Zero-based sensor columns; default 1..18 excludes time")
@@ -130,11 +129,23 @@ def parser():
     result.add_argument("--validation-fraction", type=float, default=0.2)
     result.add_argument("--test-fraction", type=float, default=0.0)
     result.add_argument("--seed", type=int, default=42)
-    result.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    result.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto",
+                        help="auto/cuda require CUDA; cpu is rejected (no CPU backend)")
     result.add_argument("--checkpoint", type=Path,
                         help="Evaluate a checkpoint created by this release; no training")
     result.add_argument("--partition", choices=["validation", "test"], default="validation")
     return result
+
+
+def resolve_device(requested):
+    """Resolve the real CUDA backend; never silently execute Mamba on CPU."""
+    if requested == "cpu":
+        raise ValueError("Real Mamba requires CUDA on Linux/WSL; CPU execution is not supported")
+    if requested not in ("auto", "cuda"):
+        raise ValueError("Device must be auto or cuda")
+    if not torch.cuda.is_available():
+        raise ValueError("Real Mamba requires CUDA on Linux/WSL, but CUDA is unavailable")
+    return "cuda"
 
 
 def main(argv=None):
@@ -151,9 +162,10 @@ def main(argv=None):
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         argument_parser.error("Output directory must be empty; use a new directory for each run")
     root = args.data_dir.resolve()
-    device = ("cuda" if torch.cuda.is_available() else "cpu") if args.device == "auto" else args.device
-    if device == "cuda" and not torch.cuda.is_available():
-        argument_parser.error("CUDA requested but unavailable")
+    try:
+        device = resolve_device(args.device)
+    except ValueError as exc:
+        argument_parser.error(str(exc))
     checkpoint = None
     if args.checkpoint:
         # Restricted tensor/state loading, not arbitrary full-model unpickling.
@@ -161,9 +173,13 @@ def main(argv=None):
         if checkpoint.get("format_version") != 1:
             raise ValueError("Unsupported checkpoint format")
         config = checkpoint["configuration"]
+        if config.get("model") != "mamba":
+            raise ValueError("Checkpoint must contain a Mamba configuration")
     else:
         config = {key: value for key, value in vars(args).items()
                   if key not in {"data_dir", "output_dir", "checkpoint", "partition", "device"}}
+        # Fixed checkpoint metadata, not a configurable model selector.
+        config["model"] = "mamba"
     random.seed(config["seed"])
     np.random.seed(config["seed"])
     torch.manual_seed(config["seed"])
@@ -171,8 +187,6 @@ def main(argv=None):
         torch.cuda.manual_seed_all(config["seed"])
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-    if config["model"] == "mamba" and device != "cuda":
-        argument_parser.error("Mamba requires CUDA on Linux/WSL; use --model lstm or gru on CPU")
     records = discover_recordings(root)
     partitions = split_recordings(records, config["validation_fraction"], config["test_fraction"], config["seed"])
     datasets = {name: GaitDataset(group, config["seq_len"], config["channels"])
@@ -182,7 +196,7 @@ def main(argv=None):
         raise ValueError("Dataset content or split differs from the checkpoint manifest")
     if checkpoint is not None and args.partition not in datasets:
         argument_parser.error("Checkpoint has no requested partition")
-    model = build_model(config["model"], len(config["channels"]), config["hidden_dim"],
+    model = build_model(len(config["channels"]), config["hidden_dim"],
                         config["num_layers"], config["d_state"], config["d_conv"],
                         config["expand"], config["dropout"]).to(device)
     criterion = nn.CrossEntropyLoss(weight=torch.tensor(config["class_weights"], device=device))

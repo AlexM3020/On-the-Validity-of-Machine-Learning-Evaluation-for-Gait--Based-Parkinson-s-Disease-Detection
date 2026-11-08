@@ -1,4 +1,5 @@
-# CPU baselines and shared training/evaluation workflow; Python 3.10+.
+# Shared data/training/evaluation dependencies; Python 3.10+.
+# Real Mamba execution also needs the Linux/CUDA backend in requirements-mamba.txt.
 numpy>=1.26,<3
 torch>=2.2,<3
 scikit-learn>=1.4,<2

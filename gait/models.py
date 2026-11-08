@@ -1,4 +1,4 @@
-"""Reconstructed classifiers; no claim of exact historical reproducibility.
+"""Reconstructed Mamba classifier; no exact historical reproducibility claim.
 
 The Mamba dependency is imported only upon MambaClassifier construction.
 No replacement backend or training is performed on import.
@@ -9,7 +9,6 @@ from numbers import Integral, Real
 
 import torch
 from torch import nn
-from torch.nn.utils.rnn import pack_padded_sequence
 
 
 def _positive_int(value: int, name: str) -> None:
@@ -90,7 +89,7 @@ class MambaClassifier(nn.Module):
             raise RuntimeError(
                 "Mamba requires a working mamba_ssm Linux/CUDA installation and "
                 "a compatible CUDA-enabled PyTorch environment. No fallback backend "
-                "is provided; CPU baselines can use LSTM or GRU."
+                "is provided."
             ) from exc
         self.input_dim = input_dim
         self.d_conv = d_conv
@@ -115,50 +114,9 @@ class MambaClassifier(nn.Module):
         return self.cls_head(self.dropout(pooled))
 
 
-class RecurrentClassifier(nn.Module):
-    """Packed bidirectional LSTM/GRU with final-layer forward/backward states."""
-
-    def __init__(
-        self, model_name: str, input_dim: int, hidden_dim: int = 128,
-        num_layers: int = 2, dropout: float = 0.0,
-    ) -> None:
-        super().__init__()
-        _config(input_dim, hidden_dim, num_layers, dropout)
-        if not isinstance(model_name, str) or model_name.lower() not in ("lstm", "gru"):
-            raise ValueError("Recurrent model_name must be 'lstm' or 'gru'")
-        self.model_name = model_name.lower()
-        self.input_dim = input_dim
-        recurrent = nn.LSTM if self.model_name == "lstm" else nn.GRU
-        self.recurrent = recurrent(
-            input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
-            bidirectional=True, dropout=dropout if num_layers > 1 else 0.0,
-        )
-        self.dropout = nn.Dropout(dropout)
-        self.cls_head = nn.Linear(2 * hidden_dim, 2)
-
-    def forward(self, x: torch.Tensor, lengths: torch.Tensor | None = None) -> torch.Tensor:
-        lengths = _lengths(x, lengths, self.input_dim)
-        packed = pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=False)
-        _, state = self.recurrent(packed)
-        hidden = state[0] if self.model_name == "lstm" else state
-        last_layer = torch.cat((hidden[-2], hidden[-1]), dim=-1)
-        return self.cls_head(self.dropout(last_layer))
-
-
 def build_model(
-    model_name: str, input_dim: int, hidden_dim: int = 128, num_layers: int = 2,
+    input_dim: int, hidden_dim: int = 128, num_layers: int = 2,
     d_state: int = 32, d_conv: int = 32, expand: int = 2, dropout: float = 0.0,
-) -> nn.Module:
-    """Build 'mamba', 'lstm', or 'gru' (case-insensitive), validating config.
-
-    State/convolution/expansion settings apply only to Mamba, but must be
-    positive integers for all names. Recurrent baselines never import Mamba.
-    """
-    if not isinstance(model_name, str) or model_name.lower() not in ("mamba", "lstm", "gru"):
-        raise ValueError("model_name must be 'mamba', 'lstm', or 'gru'")
-    _config(input_dim, hidden_dim, num_layers, dropout)
-    for name, value in (("d_state", d_state), ("d_conv", d_conv), ("expand", expand)):
-        _positive_int(value, name)
-    if model_name.lower() == "mamba":
-        return MambaClassifier(input_dim, hidden_dim, num_layers, d_state, d_conv, expand, dropout)
-    return RecurrentClassifier(model_name, input_dim, hidden_dim, num_layers, dropout)
+) -> MambaClassifier:
+    """Build the Mamba classifier, validating its dimensions and dropout."""
+    return MambaClassifier(input_dim, hidden_dim, num_layers, d_state, d_conv, expand, dropout)

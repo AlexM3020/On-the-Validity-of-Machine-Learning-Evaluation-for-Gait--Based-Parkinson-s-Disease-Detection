@@ -27,7 +27,7 @@ if HAS_TORCH:
 if HAS_NUMPY and HAS_TORCH:
     from gait.data import GaitDataset, Recording, discover_recordings, split_recordings
 if HAS_TORCH:
-    from gait.models import MambaClassifier, RecurrentClassifier, build_model, wide_mamba_forward
+    from gait.models import MambaClassifier, build_model, wide_mamba_forward
 
 
 class PackageTests(unittest.TestCase):
@@ -214,36 +214,6 @@ class DataTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TORCH, "Model tests require torch")
 class ModelTests(unittest.TestCase):
-    def test_cpu_recurrent_forward_backward_batch_one(self):
-        for name in ("lstm", "gru"):
-            with self.subTest(name=name):
-                model = build_model(name, input_dim=3, hidden_dim=4, num_layers=2)
-                self.assertIsInstance(model, RecurrentClassifier)
-                x = torch.randn(1, 7, 3, requires_grad=True)
-                logits = model(x, torch.tensor([5]))
-                self.assertEqual(tuple(logits.shape), (1, 2))
-                nn.functional.cross_entropy(logits, torch.tensor([1])).backward()
-                self.assertIsNotNone(x.grad)
-                self.assertTrue(torch.isfinite(x.grad).all().item())
-                self.assertTrue(torch.equal(x.grad[:, 5:], torch.zeros_like(x.grad[:, 5:])))
-                self.assertTrue(all(p.grad is not None and torch.isfinite(p.grad).all().item() for p in model.parameters()))
-
-    def test_recurrent_padding_invariance_unsorted_lengths(self):
-        for name in ("lstm", "gru"):
-            with self.subTest(name=name):
-                model = build_model(name, 3, hidden_dim=4, num_layers=2, dropout=0).eval()
-                x = torch.randn(2, 8, 3)
-                lengths = torch.tensor([3, 6])
-                changed = x.clone()
-                changed[0, 3:] = 1000
-                changed[1, 6:] = -1000
-                with torch.no_grad():
-                    actual = model(x, lengths)
-                    torch.testing.assert_close(actual, model(changed, lengths))
-                    for index, length in enumerate(lengths.tolist()):
-                        torch.testing.assert_close(actual[index:index + 1], model(x[index:index + 1, :length], torch.tensor([length])))
-                    torch.testing.assert_close(model(x), model(x, torch.tensor([8, 8])))
-
     def test_lazy_mamba_import_and_clear_missing_backend_error(self):
         original_import = builtins.__import__
         attempted = []
@@ -262,11 +232,9 @@ class ModelTests(unittest.TestCase):
             )
             isolated = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(isolated)
-            for name in ("lstm", "gru"):
-                isolated.build_model(name, 3, hidden_dim=4)(torch.randn(1, 3, 3), torch.tensor([2]))
             self.assertEqual(attempted, [])
             with self.assertRaisesRegex(RuntimeError, "Linux/CUDA"):
-                isolated.build_model("mamba", 3)
+                isolated.build_model(3)
             self.assertEqual(attempted, ["mamba_ssm"])
 
     def test_mamba_architecture_wiring_only_with_explicit_fake(self):
@@ -285,7 +253,8 @@ class ModelTests(unittest.TestCase):
         fake = types.ModuleType("mamba_ssm")
         fake.Mamba = FakeMamba
         with patch.dict(sys.modules, {"mamba_ssm": fake}):
-            model = build_model("mamba", 3, hidden_dim=4, d_conv=4).eval()
+            model = build_model(3, hidden_dim=4, d_conv=4).eval()
+        self.assertIsInstance(model, MambaClassifier)
         self.assertEqual(calls, [{"d_model": 4, "d_state": 32, "d_conv": 4, "expand": 2}] * 2)
         self.assertEqual(model.d_conv, 4)
         self.assertEqual(len(model.mamba_layers), 2)
@@ -325,7 +294,7 @@ class ModelTests(unittest.TestCase):
         fake = types.ModuleType("mamba_ssm")
         fake.Mamba = ConfigurationOnlyMamba
         with patch.dict(sys.modules, {"mamba_ssm": fake}):
-            model = build_model("mamba", 3, hidden_dim=4)
+            model = build_model(3, hidden_dim=4)
         self.assertEqual(calls, [{"d_model": 4, "d_state": 32, "d_conv": 32, "expand": 2}] * 2)
         self.assertEqual(model.d_conv, 32)
         self.assertEqual(len(model.mamba_layers), 2)
@@ -400,7 +369,7 @@ class ModelTests(unittest.TestCase):
             "mamba_ssm": fake, "mamba_ssm.ops": fake_ops,
             "mamba_ssm.ops.selective_scan_interface": fake_scan,
         }):
-            model = build_model("mamba", 3, hidden_dim=4, d_state=3).eval()
+            model = build_model(3, hidden_dim=4, d_state=3).eval()
             self.assertEqual(model.d_conv, 32)
             self.assertEqual(len(blocks), 2)
             x = torch.randn(2, 7, 3, requires_grad=True)
@@ -436,19 +405,80 @@ class ModelTests(unittest.TestCase):
                 torch.testing.assert_close(wide[:, :35], changed_wide[:, :35])
 
     def test_model_config_and_lengths_validation(self):
-        for name in ("unknown", "", None):
-            with self.subTest(name=name), self.assertRaises(ValueError):
-                build_model(name, 3)
         for config in ({"input_dim": 0}, {"hidden_dim": -1}, {"num_layers": True}, {"d_state": 0}, {"d_conv": 2.5}, {"expand": 0}, {"dropout": float("nan")}, {"dropout": 1}):
             with self.subTest(config=config), self.assertRaises(ValueError):
-                build_model("gru", **({"input_dim": 3} | config))
-        model = build_model("GRU", 3, hidden_dim=4)
+                build_model(**({"input_dim": 3} | config))
+
+        class IdentityMamba(nn.Module):
+            """Architecture-only test double; no real scan execution."""
+
+            def __init__(self, **config):
+                super().__init__()
+
+            def forward(self, hidden):
+                return hidden
+
+        fake = types.ModuleType("mamba_ssm")
+        fake.Mamba = IdentityMamba
+        with patch.dict(sys.modules, {"mamba_ssm": fake}):
+            model = build_model(3, hidden_dim=4, d_conv=4)
         for lengths in (torch.tensor([0]), torch.tensor([5]), torch.tensor([2.0]), torch.tensor([[2]]), torch.tensor([2, 2])):
             with self.subTest(lengths=lengths), self.assertRaises(ValueError):
                 model(torch.randn(1, 4, 3), lengths)
         for x in (torch.randn(4, 3), torch.randn(1, 4, 2), torch.empty(1, 0, 3), torch.ones(1, 4, 3, dtype=torch.long)):
             with self.subTest(shape=x.shape), self.assertRaises(ValueError):
                 model(x, torch.tensor([1]))
+
+
+@unittest.skipUnless(HAS_TORCH, "Real CUDA Mamba test requires torch")
+class RealCudaMambaTests(unittest.TestCase):
+    def test_real_width32_forward_backward_and_masked_padding(self):
+        """Optional real CUDA smoke test, not dataset training or research results."""
+        if not torch.cuda.is_available():
+            self.skipTest("Real CUDA Mamba test: CUDA is unavailable")
+        try:
+            importlib.import_module("mamba_ssm")
+            scan_module = importlib.import_module("mamba_ssm.ops.selective_scan_interface")
+        except (ImportError, OSError, RuntimeError) as exc:
+            self.skipTest(f"Real CUDA Mamba test: backend unavailable ({type(exc).__name__}: {exc})")
+
+        torch.manual_seed(17)
+        model = build_model(3, hidden_dim=16, d_state=8, d_conv=32).to("cuda").eval()
+        self.assertEqual(model.d_conv, 32)
+        real_scan = scan_module.selective_scan_fn
+        calls = []
+
+        def checked_real_scan(*args, **kwargs):
+            self.assertTrue(args[0].is_cuda)
+            calls.append(args[0].shape[-1])
+            return real_scan(*args, **kwargs)
+
+        # No mock hardware or substitute scan: the wrapper calls the real kernel.
+        with patch.object(scan_module, "selective_scan_fn", side_effect=checked_real_scan):
+            x = torch.randn(2, 64, 3, device="cuda", requires_grad=True)
+            lengths = torch.tensor([17, 49], device="cuda")
+            logits = model(x, lengths)
+            self.assertEqual(tuple(logits.shape), (2, 2))
+            self.assertTrue(torch.isfinite(logits).all().item())
+            nn.functional.cross_entropy(logits, torch.tensor([0, 1], device="cuda")).backward()
+            self.assertIsNotNone(x.grad)
+            self.assertTrue(torch.isfinite(x.grad).all().item())
+            self.assertGreater(x.grad.abs().sum().item(), 0)
+            self.assertTrue(all(p.grad is not None and torch.isfinite(p.grad).all().item()
+                                for p in model.parameters()))
+            changed = x.detach().clone()
+            for index, length in enumerate(lengths.tolist()):
+                changed[index, length:] = 1000 * (-1)**index
+                torch.testing.assert_close(x.grad[index, length:], torch.zeros_like(x.grad[index, length:]))
+            with torch.no_grad():
+                torch.testing.assert_close(logits, model(changed, lengths), rtol=1e-4, atol=1e-4)
+                for index, length in enumerate(lengths.tolist()):
+                    torch.testing.assert_close(
+                        logits[index:index + 1],
+                        model(x[index:index + 1, :length], lengths[index:index + 1]),
+                        rtol=1e-4, atol=1e-4,
+                    )
+            self.assertEqual(calls, [64, 64, 64, 64, 17, 17, 49, 49])
 
 
 if __name__ == "__main__":
