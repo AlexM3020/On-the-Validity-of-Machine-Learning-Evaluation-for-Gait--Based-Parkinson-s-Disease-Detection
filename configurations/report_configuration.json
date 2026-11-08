@@ -1,0 +1,117 @@
+{
+  "status": "Historical report settings and audited discrepancies; NOT an executable training configuration or exact generating run.",
+  "report_protocol": {
+    "source": "Original report, preprocessing section and Table 3; identifying document is not distributed.",
+    "task": "binary Control versus Parkinson",
+    "sequence_length": 2000,
+    "normalization": "per-channel z-score",
+    "stated_subject_level_split": [0.8, 0.2],
+    "evaluation_role": "validation used for model selection and early stopping; no untouched test set established",
+    "split_manifest_available": false,
+    "exact_generating_source_available": false
+  },
+  "report_table_3": {
+    "LSTM": {
+      "channels_as_written": [2, 5, 6, 8, 10, 13, 14, 16, 17, 18],
+      "batch_size": 32,
+      "hidden_dim": 64,
+      "layers": 2,
+      "dropout": 0.3,
+      "learning_rate": 0.005,
+      "optimizer": "Adam",
+      "loss": "BCE",
+      "early_stopping_patience": 10,
+      "lr_scheduler_patience": 5
+    },
+    "GRU": {
+      "channels_as_written": "all",
+      "batch_size": 32,
+      "hidden_dim": 96,
+      "layers": 3,
+      "dropout": 0.3,
+      "learning_rate": 0.00025,
+      "optimizer": "Adam",
+      "loss": "BCE",
+      "early_stopping_patience": 10,
+      "lr_scheduler_patience": 5
+    },
+    "Mamba": {
+      "channels_as_written": "all",
+      "batch_size": 64,
+      "hidden_dim": 128,
+      "layers": 2,
+      "dropout_as_written": "not specified (dash)",
+      "learning_rate": 0.00005,
+      "optimizer": "Adam",
+      "loss": "CE",
+      "class_weights_as_written": [1.1, 1.0],
+      "early_stopping_patience": 10,
+      "lr_scheduler_patience": 5,
+      "d_state": 32,
+      "d_conv": 32,
+      "pooling_in_report_diagram": "temporal max pooling"
+    }
+  },
+  "original_run_10_note": {
+    "sequence_length": 1000,
+    "d_model": 128,
+    "layers": 2,
+    "expand": 2,
+    "d_state": 32,
+    "d_conv": 16,
+    "learning_rate": 0.00005,
+    "batch_size": 64,
+    "channels_as_written": "all"
+  },
+  "local_checkpoint_static_audit": {
+    "checkpoint_distributed": false,
+    "method": "ZIP member and pickle opcode inspection; no unpickling or torch.load",
+    "input_projection": [18, 128],
+    "mamba_module_list_blocks": 2,
+    "block_d_model": 128,
+    "block_d_state": 32,
+    "block_d_conv": 32,
+    "block_expand": 2,
+    "block_d_inner": 256,
+    "block_dt_rank": 8,
+    "classifier_projection": [128, 2],
+    "forward_residual_and_pooling_behavior": "not recoverable from serialized module metadata alone"
+  },
+  "copied_result_provenance": {
+    "mamba_report.json": {
+      "original_relative_location": "results_mamba/outputs/metrics_10/classification_report.json",
+      "sha256": "163243356612ff8735fbc236bb8cdc5a3ab3afd50c442e543939768879d0f138",
+      "support": 790,
+      "accuracy": 0.8860759493670886,
+      "macro_f1": 0.8852255777463534
+    },
+    "lstm_report.csv": {
+      "original_relative_location": "lstm_gru_transformer/results_2/classification_report_2.csv",
+      "sha256": "1aec44d7e135520c8538ecee8ce96d511ed99b1ac571c4fd5066e4a4603d15bb",
+      "support": 390,
+      "accuracy": 0.8717948717948718,
+      "macro_f1": 0.8715787255341008
+    },
+    "gru_report.csv": {
+      "original_relative_location": "lstm_gru_transformer/results_gru/classification_report_3.csv",
+      "sha256": "be03f55111063fbc9288f9da932d1dcc2db3a84dd3504c7cdc6848e65b660b87",
+      "support": 390,
+      "accuracy": 0.8435897435897436,
+      "macro_f1": 0.8433580246913581
+    }
+  },
+  "discrepancies_and_limits": [
+    "Report preprocessing specifies 2000 timesteps; the run-10 note specifies 1000. Their relationship to the saved metrics is unresolved.",
+    "Mamba support is 790; LSTM and GRU support is 390 each. These are scored samples, not participant counts. Identical validation inputs are not established.",
+    "The run-10 note says d_conv=16; the local full checkpoint contains d_conv=32, matching the report table rather than that note.",
+    "Historical legacy/mamba.py passes n_layers=4 to a single Mamba constructor. That keyword is unsupported by the originally bundled Mamba constructor; it does not demonstrate a four-block stack. Preserved, not repaired.",
+    "Historical legacy/mamba.py selects the final timestep and has no temporal max-pooling operation. It also differs in channels, batch size, learning rate, normalization, and explicit stacking from the reported setup. Do not silently add pooling or call this the exact generating source.",
+    "Historical legacy/lstm.py uses batch size 64, different channels, early-stopping patience 20 and scheduler patience 10; the report table gives 32, the listed channel subset, 10 and 5.",
+    "Historical legacy/gru.py uses hidden dimension 80 and learning rate 0.001; the report table gives 96 and 0.00025.",
+    "The report calls the 80-percent portion testing; the historical code uses it for training. Treat the available numbers as validation results, not an independently held-out test.",
+    "Historical legacy/lstm2.py uses file-level splitting and can leak participants. It is not a paper-validated result. Historical multiclass source also has no validated result supplied.",
+    "Input channel numbering is preserved as written. Historical recurrent scripts subtract one from channel indices; historical Mamba indexes columns directly. Numerical channel lists are not automatically equivalent.",
+    "No complete run-to-source-to-split manifest or historical dependency lock is available. Model selection, preprocessing, augmentation and random-state provenance are incomplete.",
+    "Differences in batch size, learning rate and loss confound architecture-only comparisons and claims about training-curve stability. No significance, runtime superiority or leakage inflation estimate is established."
+  ]
+}

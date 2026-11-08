@@ -1,0 +1,12 @@
+# Unpinned reference dependencies inferred from historical script imports.
+# NOT a tested historical lockfile, environment, or reproduction guarantee.
+# The standard-library audit and tests do not require any of these packages.
+numpy
+pandas
+torch
+scikit-learn
+matplotlib
+mamba-ssm
+# Optional Mamba acceleration: causal-conv1d (platform/toolchain dependent).
+# Mamba commonly needs a compatible Linux/CUDA/PyTorch/compiler environment.
+# Installing dependencies does not repair the historical n_layers API mismatch.

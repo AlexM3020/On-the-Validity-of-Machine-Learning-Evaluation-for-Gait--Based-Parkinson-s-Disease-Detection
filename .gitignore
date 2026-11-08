@@ -1,0 +1,37 @@
+# Research inputs and serialized models are deliberately not distributed.
+data/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.pickle
+*.npy
+*.npz
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.idea/
+.vscode/
+outputs/
+.audit-test-*/
+*.pdf
+*.pptx
+*.png
+results_multiclass/
+!paper/figures/*.pdf
+!paper/figures/*.png
+# LaTeX build products and the embedded style generated during compilation.
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.synctex.gz
+paper/tmlr.sty
+build/
