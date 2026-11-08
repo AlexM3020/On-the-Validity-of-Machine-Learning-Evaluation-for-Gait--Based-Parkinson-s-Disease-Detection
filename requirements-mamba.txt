@@ -1,0 +1,3 @@
+# Install after CUDA-enabled PyTorch in a Linux/WSL environment.
+# Width-32 convolution uses PyTorch; causal-conv1d is not required.
+mamba-ssm>=2.2,<3

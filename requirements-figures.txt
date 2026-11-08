@@ -1,3 +1,0 @@
-# Optional, only for regenerating the architecture and anonymizing image metadata.
-matplotlib>=3.9
-Pillow>=11

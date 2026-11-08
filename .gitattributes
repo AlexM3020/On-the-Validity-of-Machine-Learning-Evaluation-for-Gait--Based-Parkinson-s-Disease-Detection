@@ -1,4 +1,1 @@
 * text=auto eol=lf
-# Frozen reports retain original CRLF bytes and their recorded SHA-256 hashes.
-results/*.csv -text
-results/*.json -text
