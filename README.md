@@ -2,7 +2,28 @@
 
 Mamba-only research code for binary Parkinson's disease classification from multichannel gait signals. **Participant independence** is the central evaluation principle: every recording and window from a participant stays in one partition, including participants with multiple recordings.
 
-The release includes preprocessing, a Mamba classifier, training, checkpoint evaluation, and tests. It contains no manuscript, raw dataset, or pretrained weights.
+The primary experiment is the Kaggle-ready [compact Mamba notebook](notebooks/pd-mamba.ipynb), backed by tested repository code. It contains no raw dataset, pretrained weights, or newly measured classification results.
+
+## Submission evaluation workflow
+
+1. Audit original recordings before splitting: exact numeric-force duplicates within one participant are excluded and logged; duplicates attributed to different participants fail closed. Prepared/chunk-suffixed inputs are rejected. Exact hashes cannot identify all transformed or near-duplicate inputs: use the original PhysioNet release.
+2. Construct **10 stratified participant-level outer test folds**. Every eligible participant is tested exactly once per training seed.
+3. Within each outer development partition, reserve 20% of its participants for **inner validation**. This is outer cross-validation with an inner holdout, not a full inner cross-validation search.
+4. Fit normalization and inverse-window-frequency class weights on **inner training only**. No oversampling, duplicated validation windows, or augmentation is used.
+5. Train three prespecified optimizer candidates. Scheduler, early stopping, checkpoint selection, and candidate selection all minimize **inner participant log loss**. Ties retain the first candidate. The model is not refitted on the outer development partition: the selected inner checkpoint is tested directly.
+6. Score the untouched outer fold once, after selection. Outer scores are not printed during selection. Finish all folds before inspecting results or proposing further changes.
+7. Average window PD probabilities within each recording, then average recording probabilities equally within each participant. Classify PD at probability >= 0.5; do not tune the threshold on outer predictions.
+8. Report pooled out-of-fold participant accuracy, balanced accuracy, macro-F1, sensitivity, specificity, ROC-AUC, and the confusion matrix. Window metrics are secondary. Class-stratified participant-bootstrap 95% percentile intervals condition on fitted predictions and class counts; they do not measure full retraining/split uncertainty. Fold standard deviation is descriptive, not a confidence interval.
+
+### Kaggle use and limited experiments
+
+Upload the notebook, enable a GPU and Internet for initial setup, and keep the existing dataset attached. Adjust `DATA_DIR` if needed. The notebook fetches the implementation at an **immutable Git commit** when not running inside the repository; it does not track a moving branch. Enable dependency installation only if the Mamba backend is absent. Code/configuration, split assignments, hashes, histories and predictions are retained in RAM. Export is explicit and optional; no figures or results are automatically saved.
+
+The default model is the compact unidirectional architecture below, not the older bidirectional/MLP/positional-embedding prototype. The initial search has only three candidates: Adam learning rate `5e-5`, Adam `2.5e-5`, and Adam `5e-5` with mild L2 weight decay `1e-4`. All use batch size 32, at most 60 epochs, early-stopping patience 10 and ReduceLROnPlateau patience 5. Gradients are clipped at norm 1. Mamba's internal initialization is preserved.
+
+Start with training seed `[42]` (30 candidate fits). The confirmatory option is `[42, 123, 2026]` on the **same outer and inner assignments** (90 fits). Each seed repeats inner selection and receives its own OOF metrics and intervals; repeated participants are never counted as independent extra observations. Across-seed variation measures training randomness, not variation over new fold assignments. For a smaller fixed-budget baseline use the first candidate only, decided before inspecting outer scores. Runtime depends on Kaggle hardware; the notebook reports measured fit times and provides a real width-32 forward/backward smoke check before training.
+
+A small future context test can compare 1,000 and 2,000 timesteps with the same architecture. Put such choices inside a predeclared inner search or evaluate them as a transparently declared follow-up; do not repeatedly optimize against the outer scores. The current candidate search deliberately changes only optimizer settings.
 
 ## Method
 
@@ -17,12 +38,12 @@ Gait signals contain both **local force patterns** and **context across successi
 ### Participant-independent inputs
 
 1. Discover full study-qualified participant IDs, such as `GaCo01`, `JuCo01`, and `SiPt02`.
-2. Stratify participants into training/validation and, optionally, held-out test partitions **before windowing**.
-3. Z-score each recording/channel independently; no normalization statistics are fitted across participants.
-4. Create nonoverlapping windows. Discard incomplete tails of long recordings; emit one masked, zero-padded window for a short recording.
-5. Save participant membership, recording hashes, and window boundaries for repeatable checkpoint evaluation.
+2. Assign participants to disjoint inner training, inner validation and outer testing groups; deterministic window indexing does not change membership.
+3. Fit each channel's mean and standard deviation over original inner-training recordings, counting each timestep once even if overlapping windows are requested. Training-recording tails are included in these statistics. Reuse these statistics unchanged for inner validation and outer testing; constant channels use standard deviation 1.
+4. Use nonoverlapping 2,000-timestep (20-second) windows by default. Drop incomplete tails and explicitly exclude recordings shorter than one window. Optional overlap never crosses recording boundaries; no padding is used by this workflow.
+5. Retain participant membership, original-file/force hashes, exclusions and window boundaries in the in-memory result bundle. Normalization statistics are stored per fold/seed.
 
-`Co` denotes control (class 0); `Pt` denotes Parkinson's disease (class 1). Metrics are per window: sample support is not a participant count.
+`Co` denotes control (class 0); `Pt` denotes Parkinson's disease (class 1). Participant metrics are primary: window support and class proportions must not be described as participant counts. Training loss remains window-weighted, so participants with longer/more recordings have more influence; participant-balanced training is a separate possible experiment.
 
 ## Results reported in the paper
 
@@ -30,7 +51,7 @@ Gait signals contain both **local force patterns** and **context across successi
 | :--- | ---: | ---: | ---: |
 | Mamba | 88.61% | 88.52% | 790 |
 
-Reported recall is **80.20% for Parkinson's disease** and **96.97% for controls**. These are historical validation results, not new measurements from this release or an untouched test set; validation informed model selection and early stopping. The release reconstructs the documented design, but the exact generating revision and split manifests were not retained, so reproducing these numbers is not guaranteed.
+Reported recall is **80.20% for Parkinson's disease** and **96.97% for controls**. These are historical development-validation results, not measurements from the corrected notebook or an untouched test set. Their nearly balanced window support must not be interpreted as natural participant prevalence. The corrected protocol must be run to obtain new results; it does not retroactively certify the historical experiment.
 
 ## Installation
 
@@ -48,60 +69,36 @@ Real Mamba training/evaluation requires **Linux or WSL, an NVIDIA GPU, CUDA-enab
 python -m pip install --no-build-isolation -r requirements-mamba.txt
 ```
 
-The **width-32 convolution uses PyTorch depthwise convolution and the real Mamba selective-scan CUDA operation**. It bypasses the small-width optimized convolution path; the optional `causal-conv1d` extension is not required. There is no substitute CPU Mamba backend. `--device auto` resolves to CUDA or fails; `--device cpu` always raises a clear error before constructing a model or creating run outputs.
+The **width-32 convolution uses PyTorch depthwise convolution and the real Mamba selective-scan CUDA operation**. It bypasses the small-width optimized convolution path; the optional `causal-conv1d` extension is not required. There is no substitute CPU Mamba backend. The notebook's real forward/backward check must pass on the selected GPU before training.
 
 ## Dataset
 
 Obtain the [Gait in Parkinson's Disease dataset from PhysioNet](https://physionet.org/content/gaitpdb/1.0.0/) under its applicable terms. Place signal text files in a local directory; recursive discovery is supported, downloading is not automatic.
 
-Accepted recording names use study prefixes `Ga`, `Ju`, or `Si`, group `Co` or `Pt`, and a two-digit participant ID; numeric recording and chunk suffixes retain that participant identity. Duplicate basenames are rejected; metadata text files are ignored.
+Accepted originals have names such as `GaCo01_01.txt`, with study `Ga`, `Ju`, or `Si`, group `Co` or `Pt`, and two-digit participant/walk identifiers. Common copy-name suffixes are audited. Non-data text files are ignored. Original time axes must be increasing and approximately 100 Hz; invalid inputs fail rather than being silently imputed.
 
-Input is a whitespace-separated matrix with **time in column 0 and 18 force channels in columns 1–18** (zero-based). Use `--channels` only for a different documented layout. Malformed matrices and nonfinite values raise errors.
+Input is a whitespace-separated matrix with **time in column 0 and 18 force channels in columns 1–18** (zero-based). Malformed matrices and nonfinite values raise errors.
 
 Use original recordings or prepared inputs that preserve participant lineage. This workflow performs no oversampling or augmentation; external preparation must not mix participants across partitions.
 
-## Training
+## Repository cleanup
 
-Run from the repository root with a new, empty output directory:
+The single-split training/checkpoint CLI and its runner-specific tests were retired so the submission has one primary evaluation workflow. Older source remains recoverable in Git history. The tested standalone data utilities are retained for compatibility but are **not used by the corrected notebook**; their recording-wise normalization and short-record padding are not this experiment's preprocessing.
 
-```bash
-python train.py --data-dir data/raw --output-dir outputs/mamba --device cuda
-```
-
-Defaults: 80/20 participant training/validation split, seed 42, Adam learning rate `5e-5`, batch size 64, cross-entropy weights `[1.1, 1.0]`, up to 100 epochs, early-stopping patience 10, and learning-rate plateau patience 5.
-
-For a new experiment with approximately 60/20/20 training/validation/test participants:
-
-```bash
-python train.py --data-dir data/raw --output-dir outputs/mamba_test --device cuda --validation-fraction 0.2 --test-fraction 0.2
-```
-
-Only validation determines early stopping and checkpoint selection; test scoring happens afterward. This option does not describe the historical result above. Inspect all settings with `python train.py --help`.
-
-## Outputs and checkpoint evaluation
-
-Runs save configuration, participant/window manifests, a best-validation state checkpoint, epoch history, a loss curve, and validation metrics/predictions. Test metrics/predictions are included when requested. Checkpoint metadata fixes `model` to `mamba`; there is no model-selection option.
-
-Evaluate a release checkpoint without retraining:
-
-```bash
-python train.py --data-dir data/raw --output-dir outputs/evaluation --checkpoint outputs/mamba/best_model.pt --partition validation --device cuda
-```
-
-Use `--partition test` only when the checkpoint includes a test partition. Evaluation restores settings and checks filenames, contents, participants, and window boundaries; mismatches are rejected. Only load trusted checkpoints, even with restricted state loading.
+The downloaded prototype's unsupported baseline-ranking prose, bidirectional architecture, ineffective augmentation flag, and repeated-last-value learning-curve padding are not carried into the new notebook. No raw evidence, model-contract tests, or historical Git commits were deleted.
 
 ## Repository layout
 
 | File | Purpose |
 | :--- | :--- |
-| [train.py](train.py) | Command-line training and checkpoint evaluation |
-| [gait/data.py](gait/data.py) | Recording discovery, participant splits, normalization, and windows |
+| [notebooks/pd-mamba.ipynb](notebooks/pd-mamba.ipynb) | Kaggle configuration, audit, training and result visualization |
+| [gait/cross_validation.py](gait/cross_validation.py) | Corrected data audit, nested selection, outer tests, aggregation, CIs and opt-in export |
+| [gait/data.py](gait/data.py) | Legacy standalone utilities, not the notebook pipeline |
 | [gait/models.py](gait/models.py) | Mamba classifier and width-32 real-scan helper |
-| [gait/experiment.py](gait/experiment.py) | Training, early stopping, metrics, plots, and provenance checks |
 | [requirements.txt](requirements.txt) | Shared dependencies |
 | [requirements-mamba.txt](requirements-mamba.txt) | Additional CUDA Mamba dependency |
 | [tests/test_data_models.py](tests/test_data_models.py) | Data tests, synthetic Mamba contracts, optional real CUDA smoke test |
-| [tests/test_experiment.py](tests/test_experiment.py) | Synthetic runner tests and production CUDA guards |
+| [tests/test_cross_validation.py](tests/test_cross_validation.py) | Synthetic leakage/selection, duplicate, weighting, OOF coverage and interval tests |
 
 ## Tests
 
@@ -109,7 +106,7 @@ Use `--partition test` only when the checkpoint includes a test partition. Evalu
 python -m unittest discover -s tests -v
 ```
 
-Data tests cover participant grouping, stratification, normalization, and padding. CPU architecture/scan-contract tests use explicitly labeled doubles. The end-to-end runner test patches device resolution and model construction to use a **synthetic trainable masked-pooling/linear classifier**, checking training, checkpoint prediction parity, and changed-input rejection. It neither executes real Mamba nor produces research results; production CUDA guards are tested separately.
+Data tests cover duplicate exclusion, cross-participant duplicate rejection, stratification, train-only normalization/weights and tail exclusion. A complete synthetic multi-fold, two-seed experiment verifies inner-only selection and OOF coverage. An outer-test perturbation test verifies that changing test signals leaves inner checkpoints unchanged. CPU architecture/scan-contract tests use explicitly labeled doubles: they neither execute real Mamba nor produce research results.
 
 An optional test executes real width-32 Mamba forward/backward passes and checks finite outputs/gradients and padding invariance. It explicitly skips when CUDA or the Mamba backend is unavailable. No dependencies are installed by the suite, and a skip is not evidence of CUDA correctness.
 
