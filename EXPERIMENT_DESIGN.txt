@@ -1,0 +1,167 @@
+COMPACT MAMBA AND TEMPORAL CNN: EXPERIMENT DESIGN
+================================================
+
+Purpose
+-------
+Compare two compact inductive biases for 18-channel, 100-Hz plantar force
+signals: input-selective temporal state propagation (Mamba) and local/dilated
+temporal filtering (CNN). The earlier 161-participant development has already
+motivated this design, so this is a follow-up, not an independently untouched
+external confirmation. Prior 72.67% and historical 88.61% results must not be
+relabelled as outputs of these new experiments.
+
+Why these models
+----------------
+Only 161 independent participant identities survive the current conservative
+curation, despite many more windows. A compact model reduces unnecessary
+capacity; normalization, context and pooling may matter as much as depth.
+Mamba: 18 -> width-64 linear projection -> LayerNorm -> two residual Mamba
+blocks with post-block LayerNorm -> mean/std temporal pooling -> dropout 0.2
+-> two-logit linear head. Initial state=16, convolution=16, expansion=2.
+No learned positional embedding, bidirectional branch or extra MLP.
+Population std uses a small variance floor for finite gradients. Mamba's
+specialized initialization is preserved; wide convolution uses the existing
+real selective-scan CUDA helper, not a surrogate backend.
+
+CNN: joint channel projection -> four residual blocks, each with two causal
+Conv1d operations, channel-only LayerNorm, GELU and dropout -> mean/std
+pooling -> dropout -> two-logit linear head. Initial width=32, kernel=7,
+dilations=1,2,4,8. Per-timestep pre-pooling receptive field is
+1 + 2*(kernel-1)*(2^layers-1) = 181 samples (1.81 seconds). Global pooling
+summarizes all positions but does not make each local feature a full-window
+ordered representation. No BatchNorm or normalization across temporal positions
+is used inside the CNN. Parameter counts are measured for every candidate;
+families are not asserted to have identical parameter counts or runtime.
+
+Official input curation
+----------------------
+All 306 original recordings are verified against the fixed PhysioNet 1.0.0
+SHA256 manifest, itself pinned by checksum. Downloads/cache writes are explicit
+input preparation, not result exports. The attached Kaggle dataset is untouched.
+Find exact numeric-force duplicates across all recordings before splitting.
+Exclude all recordings belonging to identities implicated in cross-ID duplicates:
+GaPt17_02 / GaPt18_01, and JuCo26_01 / JuPt01_01. The latter has conflicting
+diagnoses. Excluded identities: GaPt17, GaPt18, JuCo26, JuPt01 (13 recordings).
+Identical recordings within a retained identity are counted once. Do not guess
+which conflicting label is correct. Quarantine is based on provenance, not
+model performance. Exact hashes cannot detect every transformed near-duplicate.
+
+Use one common cohort eligible for the maximum candidate context (2,000
+samples), even if the chosen model uses a shorter context. This preserves
+participant comparability. The present policy retains 161 participants
+(90 PD, 71 controls), 292 recordings, and 1,529 windows at length 2,000.
+Every exclusion and original checksum remains in the exportable audit.
+
+Verified clinical join
+----------------------
+Download demographics.txt and demographics.html with official manifest checksums.
+Join ONLY exact full study-qualified IDs; cross-check diagnosis, study, numeric
+subject field and Hoehn-Yahr between formats. Missing/disagreeing metadata is
+explicit Unknown, never inferred from filenames. The TXT file has some merged
+later fields, so only its verified first nine columns are used. The malformed
+ID Juc010 is logged and not guessed as JuCo10. None of the current retained
+signal identities lack a TXT match. Control HY is not automatically assigned 0.
+Metadata is passed only to post-evaluation diagnostics, never training, candidate
+selection, threshold selection or exclusion based on model errors. A verified
+file checksum proves source fidelity, not clinical correctness of the source.
+
+Automatic search and starting settings
+-------------------------------------
+Default: 8 candidates PER FAMILY, including a fixed reference and 7 randomized
+candidates. Generate once with search seed 90210, before inspecting any outputs.
+The same candidate list is used in every outer fold and training seed. Trial
+indices share context/normalization/dropout/pooling/optimizer draws across models.
+Mamba widths: 32,64,128; blocks: 1,2; state:16,32; convolution:8,16,32; expansion:2.
+CNN widths:32,48,64; residual blocks:3,4; kernel:5,7; dilation powers of two.
+Both: sequence length 500,1000,2000; dropout 0,0.1,0.2,0.3; max or mean/std pooling;
+training-set or recording-wise channel normalization; AdamW LR log-uniform
+2.5e-5..3e-4, decoupled weight decay log-uniform 1e-4..1e-2.
+References: 1,000 samples, training normalization, mean/std pooling, dropout .2,
+AdamW LR=1e-4, weight decay=1e-3. Batch size=32, maximum 60 epochs, stopping
+patience=10, ReduceLROnPlateau patience=4, factor=.5, minimum LR=1e-7, gradient
+norm clipping=1. No augmentation, oversampling or synthetic validation samples.
+
+Training-set normalization uses each original inner-training timestep once,
+including unused tails. Recording-wise normalization uses only that individual
+recording, without labels or pooled test statistics: an offline complete-recording
+protocol, not an online claim. Drop incomplete model windows; no padding.
+Inverse window-frequency class weights are derived only from inner training.
+Longer/more recordings still contribute more training influence per person;
+participant-balanced training is not silently combined with class weighting.
+
+Validation and model selection
+------------------------------
+10 diagnosis-stratified participant outer folds with split seed 42. Within each
+outer development partition, reserve 20% of its participants for inner validation
+using split_seed + fold. This is OUTER CV WITH INNER HOLDOUT selection, not a
+full inner K-fold search. Every recording/window of an identity stays together.
+Both families and all training seeds use identical folds. Clinical metadata is
+not used to improve stratification after looking at errors.
+
+Evaluate all candidates on inner validation; minimize participant log loss for
+LR scheduling, early stopping and candidate selection. Ties retain the first.
+No test threshold fitting. Aggregate window PD probabilities within recording,
+then equal-weight recording means within participant. Threshold .5; ties PD.
+After inner selection evaluate its exact saved checkpoint ONCE on the outer
+test fold, without refitting on validation participants. Report both model
+families, never just the better outer result. No outer scores are printed during
+the experiment. Fail rather than skip failed candidates or reduce their budget.
+
+Seeds and computational cost
+----------------------------
+Default training seeds: 42,123,2026. Actual seed = training_seed + 1009*fold
+modulo 2^32. Candidates within a fold use the same initialization/shuffle seed;
+different architectures do not imply identical parameter initializations.
+Repeated seeds repeat the entire search procedure, not independent participants.
+Default total: 2 families * 10 folds * 3 seeds * 8 candidates = 480 fits, up to
+28,800 training epochs before early stopping. This may exceed one free GPU
+session. One seed/4 candidates = 80 fits, but choose a reduced budget BEFORE
+viewing any outer scores and describe that actual budget.
+
+Chunk execution stops only between complete family/seed/fold tasks. No automatic
+file exports. RAM progress can resume directly. Explicit ZIP export preserves
+completed tasks across sessions; JSON reload is restricted to result bundles,
+not pickled executable checkpoints. Resume validates source hashes, full plan,
+runtime, dataset fingerprints, selection and completed predictions. Interrupted
+tasks restart from the beginning; in-progress weights are not exported. Use the
+same versions/runtime across sessions. A GPU forward/backward check covers every
+candidate before starting. A batch-size change for memory requires a new frozen
+plan, not an unrecorded change partway through evaluation.
+
+Informative outputs
+-------------------
+Per family/seed: pooled participant accuracy, balanced accuracy, macro-F1,
+sensitivity, specificity, ROC-AUC, confusion counts and log loss. Window metrics
+are secondary. Fold accuracy SD is descriptive, not a CI. Class-stratified
+participant bootstrap gives 95% percentile intervals conditional on fitted OOF
+predictions/class counts, not full refitting or external-generalization uncertainty.
+Paired Mamba-minus-CNN bootstrap resamples the SAME participants across families
+and seeds and averages seed-specific metric differences (not ensemble predictions).
+
+Full participant error table: ID, study, fold, diagnosis, PD probability,
+correctness, recording/window counts, verified HY and status, confidence and NLL.
+Study, study-by-diagnosis, fold, PD HY and study-by-HY summaries include n and
+Wilson intervals for accuracy/sensitivity; absent stages and unknowns are explicit.
+ROC-AUC is undefined for a single-class subgroup and is not fabricated.
+High-confidence errors (predicted-class probability >= .8) and top individual
+NLL contributors are available for outer predictions AND separately for selected
+inner-validation checkpoints. Inner rows can repeat participants across folds
+and are not pooled as independent validation observations.
+Across-seed participant probability mean/sample SD, label flips and always-wrong
+flags distinguish persistent errors from training variability. Three seeds are
+still a small sample; do not select the most favorable seed.
+
+Interpretation and next steps
+-----------------------------
+Severity/cohort findings are exploratory descriptions, not causal explanations
+or confirmed subgroup differences. Sparse subgroup intervals may be wide. The
+same cohort has informed this follow-up: nested evaluation prevents direct
+test-driven checkpoint selection but does not erase researcher-level reuse.
+External/study-held-out confirmation remains valuable. The larger inner search
+can overfit its 29-person validation sets; a full inner-CV search is a higher-cost
+extension. Report the number of candidates and complete search space transparently.
+
+No new classification results are shipped. Local validation uses synthetic
+selection tests and real CPU CNN forward/backward; actual Mamba CUDA and dataset
+training must be validated/run in Kaggle. Old baseline notebook/source remain
+available for provenance, not as competing undocumented release defaults.

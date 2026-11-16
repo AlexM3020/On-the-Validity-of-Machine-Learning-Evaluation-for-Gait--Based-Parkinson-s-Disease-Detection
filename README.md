@@ -2,7 +2,21 @@
 
 Mamba-only research code for binary Parkinson's disease classification from multichannel gait signals. **Participant independence** is the central evaluation principle: every recording and window from a participant stays in one partition, including participants with multiple recordings.
 
-The primary experiment is the Kaggle-ready [compact Mamba notebook](notebooks/pd-mamba.ipynb), backed by tested repository code. It contains no raw dataset, pretrained weights, or newly measured classification results.
+## Current experiment: compact Mamba versus temporal CNN
+
+Use [the Kaggle comparison notebook](notebooks/pd-mamba-comparison.ipynb). It implements the smaller mean/std-pooling Mamba proposal and a dilated temporal CNN, **8 automatic inner-search candidates per model, 10 matched outer participant folds, and 3 training seeds**. Default cost is **480 candidate fits**; chunked execution and explicit export/resume allow multiple sessions. No automatic result files are written.
+
+The notebook verifies all official recordings and clinical metadata, quarantines four ambiguous identities implicated in exact cross-ID duplicates, and preserves a common 161-participant cohort. Candidate windows (500/1,000/2,000), normalization, architecture, pooling, dropout and AdamW settings are selected only on inner validation. Outer results stay hidden until all planned tasks finish. This is outer cross-validation with **inner holdout** search, not full inner K-fold search.
+
+Outputs include full participant errors, study/diagnosis and verified Hoehn–Yahr summaries, confidently wrong cases, inner-validation NLL contributors, across-seed stability, per-model bootstrap intervals and paired model-difference intervals. Clinical information is used only after evaluation, never as training input or a selection criterion. Missing/conflicting metadata remain explicit.
+
+Read [EXPERIMENT_DESIGN.txt](EXPERIMENT_DESIGN.txt) for rationale, ranges, exact preprocessing/validation, compute budgets, output interpretation and limitations. The starting configurations are hypotheses, not claims of improved accuracy. No new trained results or weights are included.
+
+Implementation: [comparison.py](gait/comparison.py), [comparison_models.py](gait/comparison_models.py), [official_data.py](gait/official_data.py), [diagnostics.py](gait/diagnostics.py). Regression tests include [test_comparison.py](tests/test_comparison.py).
+
+## Previous baseline (retained for provenance)
+
+The earlier [width-128 Mamba notebook](notebooks/pd-mamba.ipynb) and the following baseline documentation remain for reproducibility. They do **not** include the new comparison or integrated official-data quarantine; use the current comparison notebook above for new runs. The repository contains no raw dataset or pretrained weights.
 
 ## Submission evaluation workflow
 
