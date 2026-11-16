@@ -169,5 +169,6 @@ extension. Report the number of candidates and complete search space transparent
 
 No new classification results are shipped. Local validation uses synthetic
 selection tests and real CPU CNN forward/backward; actual Mamba CUDA and dataset
-training must be validated/run in Kaggle. Old baseline notebook/source remain
-available for provenance, not as competing undocumented release defaults.
+training must be validated/run in Kaggle. The old baseline notebook remains
+recoverable in Git history; its removed working-tree copy is not restored.
+Baseline source remains for provenance, not as an undocumented release default.

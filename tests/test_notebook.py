@@ -35,7 +35,7 @@ class NotebookTests(unittest.TestCase):
 
     def test_valid_clean_python_cells_and_pinned_implementation(self):
         root = Path(__file__).resolve().parents[1]
-        notebook = json.loads((root / "notebooks/pd-mamba.ipynb").read_text(encoding="utf-8"))
+        notebook = json.loads((root / "notebooks/pd-mamba-comparison.ipynb").read_text(encoding="utf-8"))
         self.assertEqual(notebook["nbformat"], 4)
         self.assertEqual(notebook["metadata"]["language_info"]["name"], "python")
         identifiers = []

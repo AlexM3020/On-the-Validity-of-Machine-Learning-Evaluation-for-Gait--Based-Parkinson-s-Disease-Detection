@@ -14,9 +14,9 @@ Read [EXPERIMENT_DESIGN.txt](EXPERIMENT_DESIGN.txt) for rationale, ranges, exact
 
 Implementation: [comparison.py](gait/comparison.py), [comparison_models.py](gait/comparison_models.py), [official_data.py](gait/official_data.py), [diagnostics.py](gait/diagnostics.py). Regression tests include [test_comparison.py](tests/test_comparison.py).
 
-## Previous baseline (retained for provenance)
+## Previous baseline (source and documentation retained for provenance)
 
-The earlier [width-128 Mamba notebook](notebooks/pd-mamba.ipynb) and the following baseline documentation remain for reproducibility. They do **not** include the new comparison or integrated official-data quarantine; use the current comparison notebook above for new runs. The repository contains no raw dataset or pretrained weights.
+The earlier width-128 Mamba notebook was removed on GitHub and remains recoverable in Git history. The following baseline documentation and source remain for provenance. They do **not** include the new comparison or integrated official-data quarantine; use the current comparison notebook above for new runs. The repository contains no raw dataset or pretrained weights.
 
 ## Submission evaluation workflow
 
@@ -105,7 +105,7 @@ The downloaded prototype's unsupported baseline-ranking prose, bidirectional arc
 
 | File | Purpose |
 | :--- | :--- |
-| [notebooks/pd-mamba.ipynb](notebooks/pd-mamba.ipynb) | Kaggle configuration, audit, training and result visualization |
+| [notebooks/pd-mamba-comparison.ipynb](notebooks/pd-mamba-comparison.ipynb) | Current Kaggle Mamba/CNN comparison, audit, training and diagnostics |
 | [gait/cross_validation.py](gait/cross_validation.py) | Corrected data audit, nested selection, outer tests, aggregation, CIs and opt-in export |
 | [gait/data.py](gait/data.py) | Legacy standalone utilities, not the notebook pipeline |
 | [gait/models.py](gait/models.py) | Mamba classifier and width-32 real-scan helper |
