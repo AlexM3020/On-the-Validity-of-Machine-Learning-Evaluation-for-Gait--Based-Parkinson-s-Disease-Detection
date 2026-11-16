@@ -61,6 +61,9 @@ explicit Unknown, never inferred from filenames. The TXT file has some merged
 later fields, so only its verified first nine columns are used. The malformed
 ID Juc010 is logged and not guessed as JuCo10. None of the current retained
 signal identities lack a TXT match. Control HY is not automatically assigned 0.
+The verified retained PD cohort has HY=2.0: 53 participants, HY=2.5: 28, and
+HY=3.0: 9. These are baseline cohort counts, not classification results; the
+small stage-3 subgroup particularly limits precision of subgroup comparisons.
 Metadata is passed only to post-evaluation diagnostics, never training, candidate
 selection, threshold selection or exclusion based on model errors. A verified
 file checksum proves source fidelity, not clinical correctness of the source.
@@ -117,6 +120,9 @@ Default total: 2 families * 10 folds * 3 seeds * 8 candidates = 480 fits, up to
 28,800 training epochs before early stopping. This may exceed one free GPU
 session. One seed/4 candidates = 80 fits, but choose a reduced budget BEFORE
 viewing any outer scores and describe that actual budget.
+Equal candidate counts do not imply equal GPU-hours or optimizer-update counts:
+shorter windows produce more batches, and model families have different costs.
+Per-candidate measured times and parameter counts are retained for transparency.
 
 Chunk execution stops only between complete family/seed/fold tasks. No automatic
 file exports. RAM progress can resume directly. Explicit ZIP export preserves

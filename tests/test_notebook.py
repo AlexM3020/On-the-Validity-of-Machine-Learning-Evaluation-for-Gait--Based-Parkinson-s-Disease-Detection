@@ -9,6 +9,30 @@ import unittest
 
 
 class NotebookTests(unittest.TestCase):
+    def test_comparison_notebook_clean_syntax_safety_and_source_pin(self):
+        root = Path(__file__).resolve().parents[1]
+        notebook = json.loads((root / "notebooks/pd-mamba-comparison.ipynb").read_text(encoding="utf-8"))
+        code = []
+        for cell in notebook["cells"]:
+            if cell["cell_type"] == "code":
+                source = "".join(cell["source"])
+                ast.parse(source)
+                code.append(source)
+                self.assertIsNone(cell["execution_count"])
+                self.assertEqual(cell["outputs"], [])
+        full = "\n".join(code)
+        self.assertIn("RUN_EXPERIMENT = False", full)
+        self.assertIn("SAVE_RESULTS = False", full)
+        self.assertIn("TRAINING_SEEDS = (42, 123, 2026)", full)
+        self.assertIn("CANDIDATES_PER_FAMILY = 8", full)
+        self.assertNotIn("plt.savefig", full)
+        revision = re.search(r"SOURCE_REV = '([a-f0-9]{40})'", full).group(1)
+        if (root / ".git").exists():
+            for name in ("models.py", "cross_validation.py", "comparison_models.py", "comparison.py", "official_data.py", "diagnostics.py"):
+                expected = subprocess.run(["git", "-C", str(root), "show", revision+":gait/"+name], capture_output=True, check=True).stdout
+                actual = (root / "gait" / name).read_bytes()
+                self.assertEqual(actual.replace(b"\r\n", b"\n"), expected.replace(b"\r\n", b"\n"))
+
     def test_valid_clean_python_cells_and_pinned_implementation(self):
         root = Path(__file__).resolve().parents[1]
         notebook = json.loads((root / "notebooks/pd-mamba.ipynb").read_text(encoding="utf-8"))
