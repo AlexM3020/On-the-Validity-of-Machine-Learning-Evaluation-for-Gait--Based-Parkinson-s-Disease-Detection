@@ -32,6 +32,37 @@ def synthetic_records():
 
 
 class ResidualTests(unittest.TestCase):
+    def test_epoch_recovery_after_destroyed_runtime(self):
+        from gait.durable_storage import DurableMirror,DirectoryBackend
+        from gait.torch_recovery import TorchRecovery
+        import shutil
+        records50=rexp.downsample(synthetic_records())
+        subjects={r['subject'] for r in records50}
+        ref=rexp.fit_reference(records50,subjects)
+        records=rexp.transform(records50,ref,(11,))
+        train=[r for r in records if r['subject'].endswith(('01','02','03','04'))]
+        val=[r for r in records if r['subject'].endswith(('05','06'))]
+        cfg=rexp.ResidualProtocol(window_samples=32,encoder_epochs=2,head_epochs=2,batch_size=16)
+        candidate=rexp.candidate_search(1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); local=root/'runtime'; remote=root/'cloud'
+            mirror=DurableMirror(local,DirectoryBackend(remote)); mirror.verify()
+            recovery=TorchRecovery(local/'trial',mirror)
+            original=recovery.save
+            def disconnect(payload):
+                original(payload)
+                if payload['phase']=='head' and payload['epoch']==1: raise RuntimeError('simulated VM reset')
+            with patch.object(recovery,'save',side_effect=disconnect),self.assertRaisesRegex(RuntimeError,'VM reset'):
+                rexp.train_trial(train,val,candidate,cfg,(11,),42,torch.device('cpu'),recovery=recovery)
+            shutil.rmtree(local)
+            fresh=root/'new-runtime'; recovered=DurableMirror(fresh,DirectoryBackend(remote)); recovered.verify(); recovered.restore()
+            state,trial=rexp.train_trial(train,val,candidate,cfg,(11,),42,torch.device('cpu'),recovery=TorchRecovery(fresh/'trial',recovered))
+            self.assertEqual(len(trial['history']),2); self.assertEqual(len(trial['head_history']),2)
+            final=TorchRecovery(fresh/'trial',recovered).load()
+            self.assertEqual(final['phase'],'complete')
+            self.assertEqual(final['trial'],trial)
+            for name in state: torch.testing.assert_close(state[name],final['best_state'][name])
+
     def setUp(self):
         threads = torch.get_num_threads()
         torch.set_num_threads(1)

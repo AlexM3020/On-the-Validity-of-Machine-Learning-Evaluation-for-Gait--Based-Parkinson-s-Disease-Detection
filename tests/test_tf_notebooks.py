@@ -24,6 +24,35 @@ if HAS_TF:
 
 @unittest.skipUnless(HAS_TF,"Optional TensorFlow/Keras test environment not installed")
 class TensorflowSafetyTests(unittest.TestCase):
+    def test_profiles_keep_all_test_folds_and_show_actual_work(self):
+        fast=s.profile_settings('factorial','efficient'); full=s.profile_settings('factorial','full')
+        self.assertEqual(fast['N_FOLDS'],10)
+        self.assertEqual(fast['CONDITIONS'],[['local','inner']])
+        self.assertEqual(s.budget_report(fast,'factorial')['training_stages'],20)
+        self.assertEqual(s.budget_report(full,'factorial')['training_stages'],80)
+        fixed=s.profile_settings('A','fixed')
+        self.assertEqual(s.budget_report(fixed,'A')['training_stages'],40)
+
+    def test_cached_frozen_head_prediction_and_loss_parity(self):
+        records=self.tiny_data(); feats={i:r['signal'] for i,r in enumerate(records)}
+        for family in ('factorial','A','LP_ResMIL'):
+            with self.subTest(family=family):
+                cfg=self.cfg('frozen')
+                win=s.build_window_classifier(cfg,32) if family=='LP_ResMIL' else s.build_variantA(channels=4,kernels=(3,3,3)) if family=='A' else s.build_lpgnet(channels=4,kernels=(3,3,3))
+                full=s.build_mil_model(win,cfg,32) if family=='LP_ResMIL' else s.build_recording_model(win)
+                kind='mil' if family=='LP_ResMIL' else 'recording'
+                source=s.Batches(records,[0,1,8],feats,kind,win=32,stride=16,batch=3)
+                head,cache,_,names=s.cached_head(full,source,None,mil=kind=='mil')
+                x,y,w=source[0]; h,_,_=cache[0]
+                np.testing.assert_allclose(full(x,training=False),head(h,training=False),atol=1e-6)
+                np.testing.assert_allclose(sum(float(v) for v in full.losses),sum(float(v) for v in head.losses),atol=1e-6)
+                s.compile_model(full,1e-3,.1); s.compile_model(head,1e-3,.1)
+                a=full.test_on_batch(x,y,return_dict=True)['loss']; b=head.test_on_batch(h,y,return_dict=True)['loss']
+                self.assertAlmostEqual(float(a),float(b),places=5)
+                with tempfile.TemporaryDirectory() as d:
+                    head.save(Path(d)/'head.keras'); restored=keras.models.load_model(Path(d)/'head.keras',safe_mode=True)
+                    np.testing.assert_allclose(head(h,training=False),restored(h,training=False),atol=1e-6)
+
     def cfg(self,mode="last"):
         return dict(channels=16,kernels=(3,5,7),se_ratio=4,embedding_dim=16,
                     spat_drop=0.,drop=0.,l2=1e-4,fine_tune=mode,lr_mil=1e-4)
@@ -110,6 +139,29 @@ class TensorflowSafetyTests(unittest.TestCase):
             with patch.object(keras.Model,'train_on_batch',side_effect=AssertionError('should not train')):
                 _,history,_=s.safe_fit(model(),train,val,Path(d),3,10,2,1e-7)
             self.assertEqual(history,h)
+
+    def test_tensorflow_epoch_restores_after_runtime_directory_deleted(self):
+        from gait.durable_storage import DurableMirror,DirectoryBackend
+        import shutil
+        records=self.tiny_data(); feats={i:r['signal'] for i,r in enumerate(records)}
+        train=s.Batches(records,[0,8],feats,'window',win=32,stride=16,batch=16,shuffle=True)
+        def model():
+            m=s.build_lpgnet(channels=4,kernels=(3,3,3),spat_drop=0.,drop=0.,noise=0.)
+            s.compile_model(m,1e-3,0.); return m
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); scratch=root/'scratch'; backend=DirectoryBackend(root/'cloud')
+            mirror=DurableMirror(scratch,backend); mirror.verify()
+            original=mirror.publish
+            def disconnect(key,files):
+                original(key,files)
+                raise RuntimeError('simulated runtime deletion')
+            with patch.object(mirror,'publish',side_effect=disconnect),self.assertRaisesRegex(RuntimeError,'runtime deletion'):
+                s.safe_fit(model(),train,None,scratch/'stage',2,10,2,1e-7,mirror=mirror)
+            shutil.rmtree(scratch)
+            fresh=root/'fresh'; restore=DurableMirror(fresh,backend); restore.verify(); restore.restore()
+            m,h,_=s.safe_fit(model(),train,None,fresh/'stage',2,10,2,1e-7,mirror=restore)
+            self.assertEqual(len(h['loss']),2)
+            self.assertEqual(int(m.optimizer.iterations),2*len(train))
 
     def test_atomic_plan_and_task_integrity(self):
         with tempfile.TemporaryDirectory() as d:

@@ -2,6 +2,18 @@
 
 The repository now studies **linear-prediction residuals (LPR), compact gait classifiers, and how preprocessing and evaluation choices affect Parkinson's disease detection**. Raw-signal Mamba/CNN experiments are retained as comparators and research history, not the sole scope. The title above is deliberately unchanged pending the author's revision.
 
+## Required cloud checkpointing and shorter run profiles
+
+**The four maintained LPGNet/LPR notebooks no longer rely on local checkpoints or a manual final export for session survival.** Before long training they require a verified Colab Drive mount or authenticated rclone cloud destination. Every committed epoch is uploaded and read back; failures stop training. On a new runtime, the same RUN_ID automatically restores committed epochs/trials/tasks into fresh scratch storage. The PyTorch LPR extensions now preserve in-progress optimizer/scheduler and RNG state as well.
+
+See [DURABLE_RUNS.md](DURABLE_RUNS.md) for setup, exact guarantees/limits, migration and budgets. **Kaggle requires a configured off-runtime remote; `/kaggle/working` is not durable.** No credentials are stored in this repository. The user's old directories/results are not deleted, but data lost with a destroyed VM cannot be reconstructed without another saved copy.
+
+The TensorFlow default `efficient` profile keeps all ten test folds, reduces epoch ceilings to 100/40, and caches fully frozen encoder features. Variant A/ResMIL use one seed and three inner-search candidates; the factorial notebook runs only `local__inner` by default and labels that as a single-condition experiment, not a factorial. `factorial_fast` retains all four conditions at reduced ceilings; `full` retains the old compute protocol. The original factorial cost was **4 × 10 × 2 = 80 stages**, up to 48,000 epochs—not four fits. A `fixed` profile skips a redundant configuration contest when there is only one declared candidate, retaining epoch selection and refit.
+
+Cached frozen stages preserve deterministic inference predictions/losses and fixed regularizers. They disable stochastic augmentation inside the frozen LPGNet/Variant-A encoder, so the accelerated path is explicitly not exact stochastic replication; the full uncached path remains available. The LPR extensions default to 40 two-stage fits (two arms, ten folds, one seed, two candidates), rather than 180. All budget changes are declared before training and require distinct run IDs.
+
+**The older persistence/default descriptions below are historical context; this durable-storage/profile section and [DURABLE_RUNS.md](DURABLE_RUNS.md) govern the current four maintained notebooks.**
+
 ## Start here: maintained Kaggle/Colab notebooks
 
 | Notebook | Purpose | Evaluation status |

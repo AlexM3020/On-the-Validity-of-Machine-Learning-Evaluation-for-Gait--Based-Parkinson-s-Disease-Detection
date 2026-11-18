@@ -26,6 +26,7 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 from . import official_data
+from .durable_storage import connect_storage
 
 
 @keras.utils.register_keras_serializable(package="GaitSafety")
@@ -148,7 +149,8 @@ def build_recording_model(window_model):
     backbone = keras.Model(window_model.input,window_model.get_layer("pooled").output)
     backbone.trainable = False
     inp = layers.Input((None,18))
-    return keras.Model(inp,layers.Dense(1,activation="sigmoid")(layers.Dropout(.25)(backbone(inp))))
+    return keras.Model(inp,layers.Dense(1,activation="sigmoid",name='recording_pd_probability')(
+        layers.Dropout(.25,name='recording_dropout')(backbone(inp))))
 
 
 def build_window_encoder(cfg, win=100, n_ch=18):
@@ -239,8 +241,9 @@ def atomic_json(path,value):
 
 class RunStore:
     """Immutable run plan; one atomic JSON transaction per completed task."""
-    def __init__(self,root,plan):
+    def __init__(self,root,plan,mirror=None):
         self.root=Path(root); self.root.mkdir(parents=True,exist_ok=True)
+        self.mirror=mirror
         self.plan=json_ready(plan); self.signature=digest(self.plan)
         path=self.root/"run_plan.json"
         if path.exists():
@@ -250,6 +253,8 @@ class RunStore:
             if any(self.root.iterdir()):
                 raise ValueError("Output directory contains legacy/unverified checkpoints; choose a new directory")
             atomic_json(path,self.plan)
+        if self.mirror is not None:
+            self.mirror.publish('run-plan',['run_plan.json'])
 
     def folder(self,key):
         return self.root/"tasks"/digest(key)
@@ -260,12 +265,17 @@ class RunStore:
         saved=json.loads(path.read_text())
         if saved["plan_signature"]!=self.signature or saved["key"]!=json_ready(key) or saved["payload_hash"]!=digest(saved["payload"]):
             raise ValueError("Corrupt or mismatched task checkpoint")
+        if self.mirror is not None:
+            # A previous transfer may have failed after the local task committed.
+            self.mirror.publish('task/'+digest(key),[path.relative_to(self.root).as_posix()])
         return saved["payload"]
 
     def save(self,key,payload):
         payload=json_ready(payload)
         atomic_json(self.folder(key)/"complete.json",dict(plan_signature=self.signature,key=key,
                     payload=payload,payload_hash=digest(payload)))
+        if self.mirror is not None:
+            self.mirror.publish('task/'+digest(key),[(self.folder(key)/'complete.json').relative_to(self.root).as_posix()])
 
 
 class Batches:
@@ -321,7 +331,112 @@ def compile_model(model,lr,label_smoothing,clipvalue=None,clipnorm=None):
                   metrics=["accuracy"],weighted_metrics=[])
 
 
-def safe_fit(model,train,validation,folder,epochs,patience,lr_patience,min_lr,verbose=0):
+@keras.utils.register_keras_serializable(package='GaitSafety')
+class ConstantPenalty(layers.Layer):
+    def __init__(self,value=0.,**kwargs):
+        super().__init__(**kwargs); self.value=float(value)
+    def call(self,x):
+        self.add_loss(tf.cast(self.value,x.dtype)); return x
+    def get_config(self): return {**super().get_config(),'value':self.value}
+
+
+class CachedEmbeddings:
+    """Exact fixed features for a declared deterministic frozen encoder."""
+    def __init__(self,source,extractor,mil=False):
+        self.source=source; self.mil=mil
+        self.values=[]; self.labels=[]; self.weights=[]
+        source.order=np.arange(len(source.items))
+        for j in range(len(source)):
+            x,y,w=source[j]
+            h=np.asarray(extractor(x,training=False),dtype=np.float32)
+            for k in range(len(y)):
+                self.values.append(h[k,x[1][k]] if mil else h[k])
+                self.labels.append(y[k]); self.weights.append(w[k] if w is not None else 1.)
+        self.order=np.arange(len(self.values))
+    def __len__(self): return int(np.ceil(len(self.values)/self.source.batch))
+    def set_epoch(self,epoch):
+        self.order=np.arange(len(self.values))
+        if self.source.shuffle: self.order=np.random.default_rng((self.source.seed+epoch)%2**32).permutation(self.order)
+    def __getitem__(self,j):
+        ids=self.order[j*self.source.batch:(j+1)*self.source.batch]
+        values=[self.values[i] for i in ids]
+        if self.mil:
+            size=max(len(v) for v in values)
+            h=np.zeros((len(ids),size,values[0].shape[-1]),np.float32); mask=np.zeros((len(ids),size),bool)
+            for i,v in enumerate(values): h[i,:len(v)]=v; mask[i,:len(v)]=True
+            x=[h,mask]
+        else: x=np.stack(values)
+        return x,np.array(self.labels,dtype=np.float32)[ids],np.array(self.weights,dtype=np.float32)[ids] if self.source.weights is not None else None
+
+
+def cached_head(full,training,validation,mil=False):
+    """Cache deterministic inference-mode backbone, including its constant L2 loss.
+
+    Original LPGNet frozen backbones still contain noise/dropout whose training
+    behavior is stochastic. This is an explicit accelerated-protocol choice,
+    not a claimed exact stochastic reproduction. Uncached mode remains available.
+    """
+    layer=full.get_layer('shared_window_encoder') if mil else next(l for l in full.layers if isinstance(l,keras.Model))
+    if (layer.encoder.trainable if mil else layer.trainable):
+        raise ValueError('Cannot cache a trainable encoder')
+    encoded=layer(full.inputs if mil else full.inputs[0],training=False)
+    extractor=keras.Model(full.inputs if mil else full.inputs[0],encoded)
+    tr=CachedEmbeddings(training,extractor,mil)
+    va=CachedEmbeddings(validation,extractor,mil) if validation is not None else None
+    # extractor was executed; preserve regularizers of its fixed weights exactly.
+    penalty=float(sum(float(v.numpy()) for v in extractor.losses))
+    if mil:
+        h=layers.Input((None,int(encoded.shape[-1])),name='cached_window_embeddings')
+        mask=layers.Input((None,),dtype='bool',name='cached_mask')
+        a=full.get_layer('recording_attention_tanh')(h)
+        g=full.get_layer('recording_attention_gate')(h)
+        logits=full.get_layer('recording_attention_logits')(full.get_layer('recording_attention_gated')([a,g]))
+        weights=full.get_layer('window_attention_remask')([logits,mask])
+        z=full.get_layer('recording_embedding')([h,weights])
+        out=full.get_layer('recording_pd_probability')(full.get_layer('recording_dropout')(z))
+        head=keras.Model([h,mask],ConstantPenalty(penalty)(out))
+        names=['recording_attention_tanh','recording_attention_gate','recording_attention_logits','recording_pd_probability']
+    else:
+        h=layers.Input((int(encoded.shape[-1]),),name='cached_recording_features')
+        drop=next(l for l in full.layers if isinstance(l,layers.Dropout))
+        dense=next(l for l in full.layers if isinstance(l,layers.Dense))
+        head=keras.Model(h,ConstantPenalty(penalty)(dense(drop(h))))
+        names=[dense.name]
+    return head,tr,va,names
+
+
+def profile_settings(family,profile='efficient'):
+    """Declare the scientific budget before training; never silently skip folds."""
+    if profile not in ('efficient','full','factorial_fast','fixed'):
+        raise ValueError('Unknown run profile')
+    if profile=='factorial_fast' and family!='factorial': raise ValueError('factorial_fast is only for the factorial study')
+    result=dict(RUN_PROFILE=profile,N_FOLDS=10,N_INNER=3,
+                CACHE_FROZEN_ENCODER=profile!='full',REQUIRE_DURABLE_STORAGE=True)
+    if profile=='full':
+        result.update(MAX_EPOCHS_WIN=1000,MAX_EPOCHS_REC=200,MAX_EPOCHS_MIL=200,PATIENCE=25,RLR_PATIENCE=14,
+                      N_TRIALS=12,TRAIN_SEEDS=[42,123,2026] if family=='LP_ResMIL' else [42],
+                      CONDITIONS=[['global','test'],['local','test'],['global','inner'],['local','inner']])
+    else:
+        result.update(MAX_EPOCHS_WIN=100,MAX_EPOCHS_REC=40,MAX_EPOCHS_MIL=40,PATIENCE=12,RLR_PATIENCE=5,
+                      N_TRIALS=1 if profile=='fixed' else 3,TRAIN_SEEDS=[42],
+                      CONDITIONS=[['global','test'],['local','test'],['global','inner'],['local','inner']]
+                                 if profile=='factorial_fast' else [['local','inner']])
+    return result
+
+
+def budget_report(ns,family):
+    if family=='factorial':
+        tasks=len(ns.get('CONDITIONS',[1,2,3,4]))*ns['N_FOLDS']
+        pairs=tasks
+    else:
+        tasks=len(ns['TRAIN_SEEDS'])*ns['N_FOLDS']
+        # A fixed configuration needs epoch selection and refit, not selection-CV.
+        pairs=tasks*(2 if ns['N_TRIALS']==1 else ns['N_TRIALS']*ns['N_INNER']+2)
+    return dict(outer_tasks=tasks,two_stage_fits=pairs,training_stages=2*pairs,
+                maximum_total_epochs=pairs*(ns['MAX_EPOCHS_WIN']+ns['MAX_EPOCHS_MIL' if family=='LP_ResMIL' else 'MAX_EPOCHS_REC']))
+
+
+def safe_fit(model,train,validation,folder,epochs,patience,lr_patience,min_lr,verbose=0,mirror=None):
     """Save optimizer/model, history, LR and stopping counters at every epoch.
 
     Write a generation before atomically publishing its state pointer. Partial
@@ -339,20 +454,30 @@ def safe_fit(model,train,validation,folder,epochs,patience,lr_patience,min_lr,ve
             if hashlib.sha256(file.read_bytes()).hexdigest()!=state[key+"_sha256"]:
                 raise ValueError("Corrupt epoch checkpoint")
         model=keras.models.load_model(folder/state["last"],safe_mode=True)
+    def publish_epoch():
+        if mirror is not None:
+            files=[state_path]+[folder/state[k] for k in ('last','best_file')]
+            mirror.publish('epoch/'+folder.relative_to(mirror.local_root).as_posix(),
+                           [p.relative_to(mirror.local_root).as_posix() for p in files])
+    if state_path.exists(): publish_epoch()  # Recommit a local epoch after a failed remote write.
     for epoch in range(state["next_epoch"],epochs):
         if state["complete"]: break
+        epoch_start=time.perf_counter()
         train.set_epoch(epoch); model.reset_metrics()
         train_logs={}
         for j in range(len(train)):
             x,y,w=train[j]
             train_logs=model.train_on_batch(x,y,sample_weight=w,return_dict=True)
         logs={k:float(v) for k,v in train_logs.items()}
+        logs['train_seconds']=time.perf_counter()-epoch_start
+        validation_start=time.perf_counter()
         if validation is not None:
             validation.set_epoch(0); model.reset_metrics()
             for j in range(len(validation)):
                 x,y,w=validation[j]
                 val_logs=model.test_on_batch(x,y,sample_weight=w,return_dict=True)
             logs.update({"val_"+k:float(v) for k,v in val_logs.items()})
+        logs['validation_seconds']=time.perf_counter()-validation_start
         if not all(np.isfinite(v) for v in logs.values()): raise FloatingPointError("Nonfinite training/validation metrics")
         score=logs.get("val_loss",logs["loss"])
         improved=state["best"] is None or score<state["best"]
@@ -378,10 +503,14 @@ def safe_fit(model,train,validation,folder,epochs,patience,lr_patience,min_lr,ve
         state["next_epoch"]=epoch+1
         state["complete"]=(epoch+1>=epochs or (validation is not None and state["wait"]>=patience))
         atomic_json(state_path,state)
+        checkpoint_start=time.perf_counter()
+        publish_epoch()  # Training never advances until the off-runtime commit is verified.
         keep={Path(state[k]).parts[0] for k in ("last","best_file")}
         for old in folder.glob("epoch-*"):
             if old.is_dir() and old.name not in keep: shutil.rmtree(old)
-        if verbose: print(f"  epoch {epoch+1}: loss={logs['loss']:.4f}, monitored={score:.4f}",flush=True)
+        if verbose: print(f"  epoch {epoch+1}: loss={logs['loss']:.4f}, monitored={score:.4f}, "
+                  f"train={logs['train_seconds']:.1f}s val={logs['validation_seconds']:.1f}s "
+                  f"remote={time.perf_counter()-checkpoint_start:.1f}s",flush=True)
     if "last" not in state: raise ValueError("No completed epoch")
     model=keras.models.load_model(folder/state["best_file"] if validation is not None else folder/state["last"],safe_mode=True)
     return model,state["history"],state["best_epoch"] if validation is not None else state["next_epoch"]
@@ -480,30 +609,46 @@ class NotebookExperiment:
     """Shared tested runner; namespace is read only except returned results."""
     def __init__(self,ns,family):
         self.ns,self.family=ns,family
+        self.mirror=ns.get('DURABLE_MIRROR')
+        if ns.get('REQUIRE_DURABLE_STORAGE',False) and (self.mirror is None or not self.mirror.verified):
+            raise RuntimeError('Long training requires verified off-runtime storage; run the storage cell first')
+        if self.mirror is not None and self.mirror.local_root!=Path(ns['CHECKPOINT_DIR']).resolve():
+            raise ValueError('Checkpoint directory does not match durable mirror')
+        if ns.get('REQUIRE_GPU',False) and not tf.config.list_physical_devices('GPU'):
+            raise RuntimeError('No TensorFlow GPU detected; refusing accidental multi-hour CPU research run')
         self.records=ns["records"]
         self.folds=outer_folds(self.records,ns["N_FOLDS"],ns["FOLD_SEED"])
         self.processed={i:lfilter([.5,.5],1,r["signal"],axis=0)[::2] for i,r in enumerate(self.records)}
         keys=("SEED","FOLD_SEED","SPLIT_SEED","SEARCH_SEED","N_FOLDS","N_INNER","VAL_FRAC","LP_ORDER",
               "WIN","STRIDE","BATCH_WIN","BATCH_REC","PRED_BATCH","LR_WIN","LR_REC","LABEL_SMOOTH","L2_REG",
               "MAX_EPOCHS_WIN","MAX_EPOCHS_REC","MAX_EPOCHS_MIL","PATIENCE","RLR_PATIENCE","MIN_LR",
-              "TRAIN_SEEDS","N_TRIALS","THRESHOLD","COHORT_POLICY","SPACE_A","SPACE_RESMIL","EXPORT_ATTENTION")
+              "TRAIN_SEEDS","N_TRIALS","THRESHOLD","COHORT_POLICY","SPACE_A","SPACE_RESMIL","EXPORT_ATTENTION",
+              "RUN_PROFILE","CACHE_FROZEN_ENCODER","CONDITIONS")
         self.config={k:json_ready(ns[k]) for k in keys if k in ns}
-        self.plan=dict(schema=2,family=family,configuration=self.config,
+        self.plan=dict(schema=3,family=family,configuration=self.config,
             runtime=dict(tensorflow=tf.__version__,keras=keras.__version__,numpy=np.__version__,
                          scipy=scipy.__version__,sklearn=sklearn.__version__,python=platform.python_version()),
             source_hash=hashlib.sha256(Path(__file__).read_bytes().replace(b"\r\n",b"\n")).hexdigest(),
+            storage_source_hash=hashlib.sha256(Path(__file__).with_name('durable_storage.py').read_bytes().replace(b'\r\n',b'\n')).hexdigest(),
             audit=ns.get("data_audit",[]),provenance=ns.get("data_provenance",{}),
             inventory=[dict(file=r["file"],subject=r["subject"],label=r["label"],
                        signal_sha256=hashlib.sha256(r["signal"].tobytes()).hexdigest()) for r in self.records],
             folds=[{part:[self.records[i]["file"] for i in indices] for part,indices in f.items()} for f in self.folds])
-        self.store=RunStore(ns["CHECKPOINT_DIR"],self.plan)
+        self.store=RunStore(ns["CHECKPOINT_DIR"],self.plan,self.mirror)
+        self._feature_cache={}
 
     def features(self,training,evaluation):
+        cache_key=digest([training,evaluation])
+        if cache_key in self._feature_cache: return self._feature_cache[cache_key]
         controls=[self.processed[i] for i in training if self.records[i]["label"]==0]
         C,stds=fit_lp(controls,self.ns["LP_ORDER"])
         feats={i:apply_lp(self.processed[i],C,stds) for i in dict.fromkeys(training+evaluation)}
         reference=dict(coefficients=C.tolist(),stds=stds.tolist(),
                        controls=[self.records[i]["file"] for i in training if self.records[i]["label"]==0])
+        # Small LRU: inner folds reuse the same core reference across candidates.
+        if len(self._feature_cache)>=self.ns.get('N_INNER',3)+1:
+            self._feature_cache.pop(next(iter(self._feature_cache)))
+        self._feature_cache[cache_key]=(feats,reference)
         return feats,reference
 
     def batches(self,indices,feats,kind,seed,shuffle=False):
@@ -522,14 +667,26 @@ class NotebookExperiment:
         window_epochs=epochs["window"] if epochs else ns["MAX_EPOCHS_WIN"]
         second="mil" if self.family=="LP_ResMIL" else "recording"
         win,h1,e1=safe_fit(win,self.batches(tr,feats,"window",seed,True),validation,folder/"window",
-            max(1,window_epochs),ns["PATIENCE"],ns["RLR_PATIENCE"],ns["MIN_LR"],ns.get("VERBOSE_EPOCHS",0))
+            max(1,window_epochs),ns["PATIENCE"],ns["RLR_PATIENCE"],ns["MIN_LR"],ns.get("VERBOSE_EPOCHS",0),self.mirror)
         full=build_mil_model(win,cfg,ns["WIN"]) if second=="mil" else build_recording_model(win)
         compile_model(full,cfg["lr_mil"] if second=="mil" else ns["LR_REC"],ns["LABEL_SMOOTH"],
                       clipnorm=1. if second=="mil" else None,clipvalue=None if second=="mil" else 1.)
         limit=epochs[second] if epochs else ns["MAX_EPOCHS_MIL"] if second=="mil" else ns["MAX_EPOCHS_REC"]
-        full,h2,e2=safe_fit(full,self.batches(tr,feats,second,seed+1,True),
-            self.batches(va,feats,second,seed+1) if va is not None else None,folder/"recording",
-            max(1,limit),ns["PATIENCE"],ns["RLR_PATIENCE"],ns["MIN_LR"],ns.get("VERBOSE_EPOCHS",0))
+        training=self.batches(tr,feats,second,seed+1,True)
+        validation=self.batches(va,feats,second,seed+1) if va is not None else None
+        cache_enabled=ns.get('CACHE_FROZEN_ENCODER',False) and (second!='mil' or cfg['fine_tune']=='frozen')
+        if cache_enabled:
+            start=time.perf_counter()
+            head,training,validation,names=cached_head(full,training,validation,mil=second=='mil')
+            compile_model(head,cfg['lr_mil'] if second=='mil' else ns['LR_REC'],ns['LABEL_SMOOTH'],
+                          clipnorm=1. if second=='mil' else None,clipvalue=None if second=='mil' else 1.)
+            print(f'Frozen encoder cached once in {time.perf_counter()-start:.1f}s; stage 2 trains the small head only.',flush=True)
+            head,h2,e2=safe_fit(head,training,validation,folder/'recording_cached',max(1,limit),
+                ns['PATIENCE'],ns['RLR_PATIENCE'],ns['MIN_LR'],ns.get('VERBOSE_EPOCHS',0),self.mirror)
+            for name in names: full.get_layer(name).set_weights(head.get_layer(name).get_weights())
+        else:
+            full,h2,e2=safe_fit(full,training,validation,folder/"recording",
+                max(1,limit),ns["PATIENCE"],ns["RLR_PATIENCE"],ns["MIN_LR"],ns.get("VERBOSE_EPOCHS",0),self.mirror)
         return full,dict(window=e1,**{second:e2}),dict(window=h1,**{second:h2})
 
     def predict(self,model,indices,feats,base,attention=False):
@@ -586,7 +743,8 @@ class NotebookExperiment:
                     # Local fold indices map back to the immutable global inventory.
                     inner=[dict(train=[outer_train[i] for i in f["train"]],test=[outer_train[i] for i in f["test"]]) for f in inner]
                     trial_rows=[]; all_inner=[]
-                    for t,cfg in enumerate(configs):
+                    second='mil' if self.family=='LP_ResMIL' else 'recording'
+                    for t,cfg in enumerate(configs if ns['N_TRIALS']>1 else []):
                         prediction_rows=[]; best_epochs=[]
                         for j,f in enumerate(inner):
                             key=("inner",self.family,seed,k,t,j)
@@ -612,7 +770,14 @@ class NotebookExperiment:
                             **{"mean_best_"+second+"_epoch":float(np.mean([e[second] for e in best_epochs]))},**params)
                         trial_rows.append(trial); all_inner.append(prediction_rows)
                         print(f"{self.family}: outer {k}, seed {seed}, trial {t}: inner NLL={score['log_loss']:.4f}",flush=True)
-                    selected=min(range(len(trial_rows)),key=lambda i:(trial_rows[i]["inner_participant_log_loss"],-trial_rows[i]["inner_participant_auc"]))
+                    if ns['N_TRIALS']==1:
+                        # No hyperparameter contest: avoid three redundant assessment fits.
+                        trial_rows=[dict(family=self.family,seed=seed,outer_fold=k,trial=0,candidate=configs[0],
+                            selection_mode='prespecified_single_configuration',
+                            inner_participant_log_loss=None,inner_participant_auc=None,
+                            **model_parameter_report(self.family,configs[0],ns['WIN'],ns['LP_ORDER']))]
+                        all_inner=[[]]
+                    selected=0 if ns['N_TRIALS']==1 else min(range(len(trial_rows)),key=lambda i:(trial_rows[i]["inner_participant_log_loss"],-trial_rows[i]["inner_participant_auc"]))
                     cfg=configs[selected]
                     # Additional outer-development-only early stopping; early controls excluded from LP.
                     core,early=subject_split(self.records,outer_train,ns["VAL_FRAC"],ns["SPLIT_SEED"]+300000+k)
@@ -643,7 +808,10 @@ class NotebookExperiment:
         ns=self.ns; oof=[]; folds=[]; new_tasks=0; complete=True
         all_indices=list(range(len(self.records)))
         global_feats=None
-        for scope,validation in (("global","test"),("local","test"),("global","inner"),("local","inner")):
+        conditions=ns.get('CONDITIONS',[("global","test"),("local","test"),("global","inner"),("local","inner")])
+        if not conditions or len({tuple(c) for c in conditions})!=len(conditions) or any(tuple(c) not in {('global','test'),('local','test'),('global','inner'),('local','inner')} for c in conditions):
+            raise ValueError('Invalid factorial conditions')
+        for scope,validation in conditions:
             condition=scope+"__"+validation
             for k,fold in enumerate(self.folds):
                 key=("factorial",condition,k)
@@ -730,7 +898,7 @@ def unpack_result(ns,result,family):
     if family=="factorial":
         rows=result["oof_rows"]
         groups=["condition"]
-        expected=4
+        expected=len(ns.get('CONDITIONS',[1,2,3,4]))
         data=pd.DataFrame(rows)
         fold_metrics=pd.DataFrame(result["fold_rows"])
         extras=dict(oof=ns["oof_frame"](rows),fold_metrics=fold_metrics)
@@ -739,7 +907,7 @@ def unpack_result(ns,result,family):
         expected=len(ns["TRAIN_SEEDS"])
         extras=dict(nested_oof=ns["oof_frame"](rows),trial_table=pd.DataFrame(result["all_trials"]),
             selection_table=pd.DataFrame(result["selections"]),
-            inner_selected_oof=ns["oof_frame"](result["selected_inner_rows"]),
+            inner_selected_oof=ns["oof_frame"](result["selected_inner_rows"]) if result['selected_inner_rows'] else pd.DataFrame(),
             attention_oof=pd.DataFrame(result["all_attention_rows"]))
     if data.duplicated(groups+["file"]).any(): raise ValueError("Duplicate OOF recordings")
     if data.groupby(groups).ngroups!=expected: raise ValueError("Incomplete experimental groups")
@@ -790,7 +958,8 @@ def paired_tables(ns,family,reference_path=None):
     if family=="factorial":
         for a,b in [("global__test","local__test"),("global__inner","local__inner"),
                     ("global__test","global__inner"),("local__test","local__inner"),("global__test","local__inner")]:
-            contrasts.append((a+" minus "+b,[(part[part.condition==a],part[part.condition==b])]))
+            if {a,b}<=set(part.condition):
+                contrasts.append((a+" minus "+b,[(part[part.condition==a],part[part.condition==b])]))
     elif reference_path and Path(reference_path).is_file():
         ref=pd.read_csv(reference_path)
         required={"family","seed","file","subject","label","fold","probability"}

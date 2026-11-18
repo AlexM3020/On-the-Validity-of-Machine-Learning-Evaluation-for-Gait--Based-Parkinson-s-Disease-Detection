@@ -22,6 +22,8 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from . import cross_validation as cv
 from .diagnostics import participant_errors, subgroup_table, seed_stability
+from .torch_recovery import TorchRecovery, capture_rng, restore_rng
+from .durable_storage import atomic_json, connect_storage
 
 
 VARIANTS = {"lpr11_stats": (11,), "multiscale_stats": (5, 11, 21)}
@@ -251,9 +253,12 @@ def score_head(head, embeddings, metadata, device):
     return rows, cv.metrics(rows)
 
 
-def train_trial(training_records, validation_records, candidate, cfg, orders, seed, device, verbose=False):
+def train_trial(training_records, validation_records, candidate, cfg, orders, seed, device, verbose=False,
+                recovery=None):
     """No test data argument: both stages select only on inner validation NLL."""
     cv.seed_everything(seed)
+    restored=recovery.load() if recovery is not None else None
+    if restored is not None and restored['phase']=='complete': return restored['best_state'],restored['trial']
     model = ResidualStatsCNN(len(orders), candidate["dropout"]).to(device)
     train_subjects = {r["subject"] for r in training_records}
     val_subjects = {r["subject"] for r in validation_records}
@@ -264,15 +269,27 @@ def train_trial(training_records, validation_records, candidate, cfg, orders, se
     if (counts == 0).any():
         raise ValueError("Training requires both classes")
     weights = torch.tensor(counts.sum()/(2*counts), dtype=torch.float32, device=device)
+    generator=torch.Generator().manual_seed(seed)
     loader = DataLoader(windows, batch_size=cfg.batch_size, shuffle=True,
-                        generator=torch.Generator().manual_seed(seed), drop_last=False)
+                        generator=generator, drop_last=False)
     optimizer = torch.optim.AdamW(model.parameters(), lr=candidate["lr"], weight_decay=candidate["weight_decay"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=cfg.scheduler_patience, factor=.5)
     best, stale, best_state, history, best_epoch = float("inf"), 0, None, [], 0
     start = time.perf_counter()
+    accumulated_seconds=restored.get('seconds',0.) if restored else 0.
+    first_epoch=1
+    if restored is not None:
+        best_state=restored['encoder_best']; history=restored['history']; best_epoch=restored['best_epoch']
+        best=restored['best']; stale=restored['encoder_stale']
+        if restored['phase']=='encoder':
+            model.load_state_dict(restored['model']); optimizer.load_state_dict(restored['optimizer'])
+            scheduler.load_state_dict(restored['scheduler']); restore_rng(restored,generator)
+            first_epoch=restored['epoch']+1
+        else: first_epoch=cfg.encoder_epochs+1
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
-    for epoch in range(1, cfg.encoder_epochs+1):
+    for epoch in range(first_epoch, cfg.encoder_epochs+1):
+        if stale>=cfg.patience: break
         model.train()
         numerator = denominator = 0.
         for x, y in loader:
@@ -298,6 +315,10 @@ def train_trial(training_records, validation_records, candidate, cfg, orders, se
             best_state = {k:v.detach().cpu().clone() for k,v in model.state_dict().items()}
         else:
             stale += 1
+        if recovery is not None:
+            recovery.save(dict(phase='encoder',epoch=epoch,model=model.state_dict(),optimizer=optimizer.state_dict(),
+                scheduler=scheduler.state_dict(),encoder_best=best_state,history=history,best_epoch=best_epoch,
+                best=best,encoder_stale=stale,seconds=accumulated_seconds+time.perf_counter()-start,**capture_rng(generator)))
         if verbose:
             print(f"    encoder {epoch}: inner NLL={scores['log_loss']:.4f}", flush=True)
         if stale >= cfg.patience:
@@ -305,6 +326,8 @@ def train_trial(training_records, validation_records, candidate, cfg, orders, se
     if best_state is None:
         raise RuntimeError("No valid encoder checkpoint")
     model.load_state_dict(best_state)
+    encoder_best=best_state
+    encoder_stale=stale
     # Stage 2: fixed recording embeddings and exactly one supervised sample/person.
     train_emb, train_meta = participant_embeddings(model, training_records, train_subjects, device)
     val_emb, val_meta = participant_embeddings(model, validation_records, val_subjects, device)
@@ -313,14 +336,23 @@ def train_trial(training_records, validation_records, candidate, cfg, orders, se
     for p in model.head.parameters():
         p.requires_grad_(True)
     y_train = torch.tensor([r["label"] for r in train_meta], dtype=torch.long)
+    head_generator=torch.Generator().manual_seed(seed+1)
     head_loader = DataLoader(TensorDataset(train_emb, y_train), batch_size=cfg.batch_size, shuffle=True,
-                             generator=torch.Generator().manual_seed(seed+1))
+                             generator=head_generator)
     optimizer = torch.optim.AdamW(model.head.parameters(), lr=cfg.head_lr, weight_decay=candidate["weight_decay"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=cfg.scheduler_patience, factor=.5)
     # Epoch zero is a legitimate candidate: retain the encoder-stage head if calibration hurts.
     best_rows, best_scores = score_head(model.head, val_emb, val_meta, device)
     head_best, head_epoch, stale, head_history = best_scores["log_loss"], 0, 0, []
-    for epoch in range(1, cfg.head_epochs+1):
+    head_start=1
+    if restored is not None and restored['phase']=='head':
+        model.load_state_dict(restored['model']); optimizer.load_state_dict(restored['optimizer'])
+        scheduler.load_state_dict(restored['scheduler']); restore_rng(restored,head_generator)
+        head_best=restored['head_best']; head_epoch=restored['head_epoch']; stale=restored['head_stale']
+        head_history=restored['head_history']; best_rows=restored['best_rows']; best_scores=restored['best_scores']
+        best_state=restored['best_state']; head_start=restored['epoch']+1
+    for epoch in range(head_start, cfg.head_epochs+1):
+        if stale>=cfg.patience: break
         model.head.train()
         total, n = 0., 0
         for emb, y in head_loader:
@@ -344,6 +376,12 @@ def train_trial(training_records, validation_records, candidate, cfg, orders, se
             best_state = {k:v.detach().cpu().clone() for k,v in model.state_dict().items()}
         else:
             stale += 1
+        if recovery is not None:
+            recovery.save(dict(phase='head',epoch=epoch,model=model.state_dict(),optimizer=optimizer.state_dict(),
+                scheduler=scheduler.state_dict(),encoder_best=encoder_best,history=history,best_epoch=best_epoch,best=best,
+                encoder_stale=encoder_stale,head_best=head_best,head_epoch=head_epoch,head_stale=stale,
+                head_history=head_history,best_rows=best_rows,best_scores=best_scores,best_state=best_state,
+                seconds=accumulated_seconds+time.perf_counter()-start,**capture_rng(head_generator)))
         if stale >= cfg.patience:
             break
     if device.type == "cuda":
@@ -352,17 +390,18 @@ def train_trial(training_records, validation_records, candidate, cfg, orders, se
                  best_encoder_epoch=best_epoch, best_head_epoch=head_epoch,
                  history=history, head_history=head_history, inner_metrics=best_scores,
                  validation_participants=best_rows, window_class_weights=weights.cpu().tolist(),
-                 seconds=time.perf_counter()-start,
+                 seconds=accumulated_seconds+time.perf_counter()-start,
                  peak_allocated_bytes=torch.cuda.max_memory_allocated(device) if device.type == "cuda" else None)
     del model, optimizer, scheduler
     if device.type == "cuda":
         torch.cuda.empty_cache()
+    if recovery is not None: recovery.save(dict(phase='complete',best_state=best_state,trial=trial))
     return best_state, trial
 
 
 def engine_hashes():
     return {n:hashlib.sha256((Path(__file__).parent/n).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
-            for n in ("residual_experiment.py", "official_data.py", "cross_validation.py", "diagnostics.py")}
+            for n in ("residual_experiment.py", "official_data.py", "cross_validation.py", "diagnostics.py",'torch_recovery.py','durable_storage.py')}
 
 
 def runtime():
@@ -388,8 +427,13 @@ def summarize(result):
     result["summaries"], result["complete"] = summaries, True
 
 
-def run(records, audit, provenance, cfg, candidates, *, progress=None, max_new_tasks=2, verbose=False, device="cuda"):
+def run(records, audit, provenance, cfg, candidates, *, progress=None, max_new_tasks=2, verbose=False, device="cuda",
+        checkpoint_dir=None, mirror=None, require_durable=False):
     validate(cfg, candidates)
+    if require_durable and (mirror is None or not mirror.verified or checkpoint_dir is None):
+        raise RuntimeError('Verified off-runtime storage is required before training')
+    if mirror is not None and mirror.local_root!=Path(checkpoint_dir).resolve():
+        raise ValueError('Checkpoint directory does not match durable mirror')
     if device not in ("cuda", "cpu"):
         raise ValueError("Choose real PyTorch CPU or CUDA execution")
     if device == "cuda" and not torch.cuda.is_available():
@@ -409,11 +453,26 @@ def run(records, audit, provenance, cfg, candidates, *, progress=None, max_new_t
                     source_hashes=engine_hashes(), environment=runtime(), device=str(device)), sort_keys=True, allow_nan=False))
     signature = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
     result = {} if progress is None else progress
+    checkpoint_dir=Path(checkpoint_dir).resolve() if checkpoint_dir is not None else None
+    progress_path=checkpoint_dir/'progress.json' if checkpoint_dir else None
+    if progress_path is not None and progress_path.exists() and not result:
+        result.update(json.loads(progress_path.read_text()))
     if result:
         if result.get("plan_signature") != signature or any(result.get(k) != v for k,v in plan.items()):
             raise ValueError("Resume rejected: plan, data, source or environment changed")
     else:
         result.update(**plan, plan_signature=signature, runs=[], complete=False)
+    def save_progress():
+        if progress_path is not None:
+            atomic_json(progress_path,result)
+            if mirror is not None: mirror.publish('progress',['progress.json'])
+    if checkpoint_dir is not None:
+        plan_path=checkpoint_dir/'plan.json'
+        if plan_path.exists() and json.loads(plan_path.read_text())!=plan:
+            raise ValueError('Checkpoint plan mismatch')
+        atomic_json(plan_path,plan)
+        if mirror is not None: mirror.publish('plan',['plan.json'])
+        save_progress()
     tasks = [(f, seed, split) for seed in cfg.training_seeds for split in splits for f in VARIANTS]
     keys = [(r["family"], r["seed"], r["fold"]) for r in result["runs"]]
     if keys != [(f, s, sp["fold"]) for f,s,sp in tasks[:len(keys)]]:
@@ -459,7 +518,11 @@ def run(records, audit, provenance, cfg, candidates, *, progress=None, max_new_t
         trials, best, state, selected = [], float("inf"), None, None
         actual_seed = (seed+1009*split["fold"]) % 2**32
         for index, candidate in enumerate(candidates):
-            candidate_state, trial = train_trial(training, validation, candidate, cfg, orders, actual_seed, device, verbose)
+            recovery=TorchRecovery(checkpoint_dir/'trials'/f'{family}-{seed}-{split["fold"]}-{index}',mirror) if checkpoint_dir else None
+            if recovery is None:
+                candidate_state, trial = train_trial(training, validation, candidate, cfg, orders, actual_seed, device, verbose)
+            else:
+                candidate_state, trial = train_trial(training, validation, candidate, cfg, orders, actual_seed, device, verbose,recovery)
             trials.append(trial)
             if trial["inner_metrics"]["log_loss"] < best:
                 best, state, selected = trial["inner_metrics"]["log_loss"], candidate_state, index
@@ -479,10 +542,12 @@ def run(records, audit, provenance, cfg, candidates, *, progress=None, max_new_t
                                   reference=reference, selected_candidate=selected, trials=trials,
                                   test_participants=test_rows, participant_metrics=scores,
                                   test_transform_encode_score_seconds=time.perf_counter()-start))
+        save_progress()
         del model, state, inner, training, validation, test
         if device.type == "cuda":
             torch.cuda.empty_cache()
     summarize(result)
+    save_progress()
     return result
 
 
