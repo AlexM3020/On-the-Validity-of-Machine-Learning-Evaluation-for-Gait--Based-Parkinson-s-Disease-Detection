@@ -4,6 +4,9 @@ checkpoints/
 *.pt
 *.pth
 *.ckpt
+*.keras
+*.weights.h5
+*_keras3_v2/
 *.pkl
 *.pickle
 *.npy
