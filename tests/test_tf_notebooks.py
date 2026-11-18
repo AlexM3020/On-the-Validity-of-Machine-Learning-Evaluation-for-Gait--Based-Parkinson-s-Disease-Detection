@@ -162,5 +162,40 @@ class TensorflowSafetyTests(unittest.TestCase):
                 again=runner.nested(max_tasks=0)
             self.assertEqual(again['all_oof_rows'],output['all_oof_rows'])
 
+    def test_factorial_all_conditions_real_fit_resume_and_reporting(self):
+        # Import only function definitions from the notebook's metrics cell, never
+        # execute setup/download/training cells during this unit test.
+        import ast
+        from sklearn.metrics import (roc_auc_score,accuracy_score,balanced_accuracy_score,
+                                    f1_score,confusion_matrix,log_loss)
+        import pandas as pd
+        records=self.tiny_data()
+        metric_ns=dict(np=np,pd=pd,roc_auc_score=roc_auc_score,accuracy_score=accuracy_score,
+            balanced_accuracy_score=balanced_accuracy_score,f1_score=f1_score,
+            confusion_matrix=confusion_matrix,log_loss=log_loss,THRESHOLD=.5,N_BOOT=2)
+        path=Path(__file__).resolve().parents[1]/'notebooks'/'LPGNet_Exact_Replication_and_Factorial_Leakage_Study_RestartSafe.ipynb'
+        document=json.loads(path.read_text(encoding='utf-8'))
+        text=next(''.join(c['source']) for c in document['cells'] if 'def metric_dict' in ''.join(c['source']))
+        definitions=ast.Module(body=[n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef)],type_ignores=[])
+        exec(compile(definitions,'<metric function definitions>','exec'),metric_ns)
+        metric_ns['clinical']={r['subject']:dict(study='Ga',diagnosis='PD' if r['label'] else 'Control',
+            hy=2. if r['label'] else np.nan,hy_label='2' if r['label'] else 'Not applicable',hy_status='verified',age=65,gender=1) for r in records}
+        with tempfile.TemporaryDirectory() as d:
+            ns=dict(metric_ns,records=records,CHECKPOINT_DIR=Path(d)/'run',SEED=1,FOLD_SEED=0,
+                N_FOLDS=2,N_INNER=2,VAL_FRAC=.5,LP_ORDER=3,WIN=32,STRIDE=16,BATCH_WIN=32,BATCH_REC=8,
+                LR_WIN=1e-3,LR_REC=1e-3,LABEL_SMOOTH=.1,MAX_EPOCHS_WIN=1,MAX_EPOCHS_REC=1,
+                PATIENCE=2,RLR_PATIENCE=1,MIN_LR=1e-7,THRESHOLD=.5,N_BOOT=2)
+            runner=s.NotebookExperiment(ns,'factorial')
+            with redirect_stdout(io.StringIO()): result=runner.factorial()
+            self.assertTrue(result['complete']); self.assertEqual(len(result['fold_rows']),8)
+            ns.update(s.unpack_result(ns,result,'factorial'))
+            ns.update(s.summary_tables(ns,'factorial'))
+            ns.update(s.error_reports(ns,'factorial'))
+            paired=s.paired_tables(ns,'factorial')
+            self.assertEqual(len(paired),40)
+            with patch.object(runner,'train',side_effect=AssertionError('must not retrain')):
+                replay=runner.factorial()
+            self.assertEqual(result,replay)
+
 
 if __name__=='__main__': unittest.main()

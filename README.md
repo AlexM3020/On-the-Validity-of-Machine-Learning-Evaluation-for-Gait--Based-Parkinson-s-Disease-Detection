@@ -1,6 +1,47 @@
 # Subject-Independent Evaluation of Mamba for Parkinson's Disease Detection from Gait Signals
 
-Research code for compact sequence models and residual-based Parkinson's disease classification from multichannel gait signals. **Participant independence** is the central evaluation principle: every recording and window from a participant stays in one partition, including participants with multiple recordings.
+The repository now studies **linear-prediction residuals (LPR), compact gait classifiers, and how preprocessing and evaluation choices affect Parkinson's disease detection**. Raw-signal Mamba/CNN experiments are retained as comparators and research history, not the sole scope. The title above is deliberately unchanged pending the author's revision.
+
+## Start here: maintained Kaggle/Colab notebooks
+
+| Notebook | Purpose | Evaluation status |
+| :--- | :--- | :--- |
+| [LPGNet factorial study](notebooks/LPGNet_Exact_Replication_and_Factorial_Leakage_Study_RestartSafe.ipynb) | Released-design reconstruction and 2×2 LP/validation leakage experiment | Intentionally leaky conditions are explicitly labelled; default original-all cohort retains known duplicate identities |
+| [Variant A](notebooks/LPGNet_Variant_A_Fully_Nested_and_Diagnostics.ipynb) | SE/channel-gated CNN with temporal attention pooling | Fully nested participant selection, core-only LP fitting and final fixed-epoch refit; curated cohort |
+| [LP-ResMIL](notebooks/LP_ResMIL_Fully_Nested_Evaluation.ipynb) | Multiscale window encoder and masked gated multiple-instance pooling | Fully nested participant selection and refit; padding excluded before encoding; curated cohort |
+| [LPR extensions](notebooks/lpr-extensions.ipynb) | Single-order versus multiscale LPR with small statistics-pooling CNNs | Outer CV with inner holdout; no original LPGNet rerun |
+| [Raw-signal Mamba/CNN comparison](notebooks/pd-mamba-comparison.ipynb) | Matched compact temporal-backbone comparison | Outer CV with inner holdout; separate experiment, not a residual-model result |
+
+The first three notebooks now use version-pinned [Keras compatibility and checkpoint support](gait/tf_notebook_support.py). The ResMIL masked `tf.where` and remasking Lambdas are replaced by serializable layers with explicit shapes. Real windows are gathered **before** the encoder so padding cannot affect trainable BatchNorm. The mechanism remains **gated attention pooling**, not Q/K/V self-attention. Variant A's pooling is serializable as well.
+
+### Safe execution and recovery
+
+1. Import the desired notebook into a fresh Kaggle/Colab kernel, enable Internet for source/data setup, and select a GPU for long training. Do not combine old cached `gait` imports with a newer notebook.
+2. Review cohort policy, seed/search budgets and `CHECKPOINT_DIR` before running. Training is disabled until `RUN_EXPERIMENT=True`. `MAX_NEW_TASKS=1` allows incremental outer-task execution.
+3. Run the real model/backpropagation/save-load smoke checks. No unsupported Keras-3 `fit(workers=...)` arguments or unsafe Lambda loading are used.
+4. Once training is enabled, **automatic atomic epoch checkpoints** preserve full model/optimizer state, history, LR and early-stopping counters. Inner assessments and outer tasks commit separately. Completed tasks are validated against filenames, participants, labels and probability ranges.
+5. Use a new `keras3_v2` run directory. Older CSV-only checkpoints are not silently migrated because model masking/reference fitting changed. The saved plan rejects data, settings, source or runtime changes.
+6. For a full runtime reset, explicitly export/download the checkpoint ZIP or use mounted persistent storage. Kaggle working storage and Colab `/content` are **not guaranteed durable across sessions**. An interrupted epoch restarts from the last committed epoch; cross-hardware bitwise equivalence is not promised.
+
+Read [TENSORFLOW_NOTEBOOKS.md](TENSORFLOW_NOTEBOOKS.md) for the exact recovery contract, verified-data policies, modernization differences and limitations. Optional dependencies are in [requirements-tensorflow.txt](requirements-tensorflow.txt); do not replace a working cloud GPU TensorFlow installation unnecessarily.
+
+### Scientific scope and evidence
+
+**Participant independence** remains central, but fitting a reference transform also belongs inside the split. For Variant A and LP-ResMIL, LP fitting excludes both early-stopping and inner-assessment participants. After selecting settings/epochs, refitting on all outer-training participants is allowed; outer test data never drive those choices. Search lists and inner partitions are independent of training seed.
+
+The official dataset contains 306 recordings with 165 recording-backed identities. Exact cross-ID duplicates involve `GaPt17/GaPt18` and `JuCo26/JuPt01`, including conflicting labels. The conservative curated policy excludes all recordings from those four identities and deduplicates within identity, retaining 161 participants and 292 recordings. Original-all factorial runs deliberately retain the original inventory; do not describe their locally fitted arm as certified identity-clean. File checksums and clinical TXT/HTML joins are verified; missing or conflicting HY remains unknown.
+
+Report participant-level OOF results and paired uncertainty as primary, recording metrics separately, and full cohort/search provenance. HY/study summaries, attention weights and high-confidence errors are exploratory diagnostics, not causal findings. Bootstrap intervals condition on fitted predictions; fold SD is not a confidence interval. Uploaded historical notebooks/results are preserved and must be distinguished from measurements of the maintained workflows.
+
+### Validation
+
+The TensorFlow suite exercises actual model construction/backpropagation, padding invariance, safe `.keras` model/optimizer roundtrips, simulated epoch interruption/resume, task-plan integrity, safe bundle restore, and a small nested training task. It was tested with TensorFlow 2.20.0 / Keras 3.15.1 on CPU. This is not a claim that full cohort GPU experiments have been rerun on Kaggle or Colab.
+
+Run the optional TensorFlow checks with `python -m unittest discover -s tests -p test_tf_notebooks.py -v` in the TensorFlow environment. The general suite includes PyTorch tests and needs its separate dependencies. Neither suite installs packages automatically.
+
+---
+
+The sections below document the earlier PyTorch experiments. Their preprocessing, selection strategy and persistence behavior differ from the maintained TensorFlow workflows above.
 
 ## New: fold-fitted LPR extensions (no original LPGNet rerun)
 
