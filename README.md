@@ -1,6 +1,12 @@
 # Subject-Independent Evaluation of Mamba for Parkinson's Disease Detection from Gait Signals
 
-Mamba-only research code for binary Parkinson's disease classification from multichannel gait signals. **Participant independence** is the central evaluation principle: every recording and window from a participant stays in one partition, including participants with multiple recordings.
+Research code for compact sequence models and residual-based Parkinson's disease classification from multichannel gait signals. **Participant independence** is the central evaluation principle: every recording and window from a participant stays in one partition, including participants with multiple recordings.
+
+## New: fold-fitted LPR extensions (no original LPGNet rerun)
+
+[Residual extension notebook](notebooks/lpr-extensions.ipynb) compares **order-11 LPR + mean/std CNN** against **orders 5/11/21 + the same mean/std CNN**. These are new extensions, not reproduction of original LPGNet. Tiny neural models contain 5,446 and 5,518 parameters; each fold fits the control-reference predictors and scaling strictly on inner-training controls. A two-stage window-encoder/participant-head workflow uses matched outer folds, three training seeds, inner-only parameter selection, and optional export/resume. No Mamba CUDA dependency is needed.
+
+Read [LPR_EXTENSION_DESIGN.txt](LPR_EXTENSION_DESIGN.txt) for exact estimator, boundary treatment, training, participant feature aggregation, limitations and the **180 two-stage-fit** default budget. Code: [residual_experiment.py](gait/residual_experiment.py); dependencies: [requirements-lpr.txt](requirements-lpr.txt). No raw data, trained weights or measured new classification results are distributed.
 
 ## Current experiment: compact Mamba versus temporal CNN
 

@@ -1,0 +1,142 @@
+MULTISCALE CONTROL-REFERENCE RESIDUAL CNN: NEW EXTENSIONS ONLY
+============================================================
+
+This experiment does NOT rerun original LPGNet, its raw-input ablation, the
+previous raw-VGRF CNN/Mamba comparison, or a new Mamba backbone. The user has
+a separate LPGNet notebook. Reference: Alle and Priyakumar, arXiv:2107.12878v1,
+https://github.com/devalab/parkinsonsfromgait (reviewed commit 4fc1fd15905be7e581832244d90d2a5793cfc893).
+Implementation here is independently written PyTorch/SciPy; it is not a claim
+of MATLAB/TensorFlow numerical equivalence or reproduction of published scores.
+
+Arms
+----
+1. lpr11_stats: control-fitted order-11 LPR + sensor-wise fusion + mean/std CNN.
+2. multiscale_stats: control-fitted orders 5,11,21 + the same fusion output and CNN.
+Both are NEW extensions, including the single-order isolation control. Neither
+is the original LPGNet architecture/training. The difference between arms is
+the available residual scales and 72 fusion weights, not a different backbone.
+The existing LPGNet result can be compared only under matching participants,
+splits, scoring unit and tuning rules; no historical metric is injected here.
+
+Representation
+--------------
+Use checksum-verified PhysioNet 1.0.0 original signals and the established
+four-identity quarantine. Common eligibility remains >=2,000 original samples.
+Known retained cohort: 161 participants (90 PD,71 controls),292 recordings.
+Fixed causal moving average [0.5,0.5] then take samples 0,2,4,... (50 Hz).
+This inexpensive filter matches the motivating approach; it is not an ideal
+brick-wall antialias filter. Do not attribute all gains to LPR versus a raw
+baseline having a different sample rate.
+
+Each outer fold has its own inner-training/validation partition. Fit the
+control-reference standard deviations ONLY on inner-training controls, with
+equal participant and within-participant equal recording weighting. Divide by
+std without subtracting means. Do not normalize each residual window to unit
+variance: preserve residual magnitude information. Constant channels use scale 1.
+
+For each channel, compute biased autocorrelations separately within each original
+recording: r(k)=sum_t x[t+k]x[t]/N. Average recordings within control participant,
+then average control participants. Solve ridge Yule-Walker equations per order,
+adding ridge*r(0) to the Toeplitz diagonal (default ridge=1e-4, fixed in both arms).
+No cross-record lags. No validation/test control contributes to the reference.
+Residual e[t]=x[t]+sum_k a[k]x[t-k], implemented by FIR filtering [1,a1,...,ap].
+Coefficients are fixed for validation/test; do not fit LP to each test recording.
+Reject nonfinite coefficients/residuals and predictors with poles >=1 in modulus.
+The residual itself is an FIR operation; this stability check concerns the
+estimated all-pole reference, not an assertion of recursive residual filtering.
+Reset filter state per recording. Discard the first 22 downsampled samples from
+BOTH arms, ensuring identical scored support and removing startup transients for
+the largest order and moving average. Order 11 uses 0.22 seconds of past samples;
+orders 5/21 use 0.10/0.42 seconds. These are support lengths, not named gait phases.
+
+Architecture
+------------
+Arrange channels sensor-major [sensor,order]. A groups=18 kernel-1 convolution
+fuses K residual streams into exactly two features/sensor (36 channels). Then
+three depthwise-separable valid convolutions with channels 32,32,64 and kernels
+7,5,3; channel-only LayerNorm and ELU; max pool 2 after the first two blocks.
+No temporal normalization inside the CNN, no learned positions or extra MLP.
+Before pooling, each feature sees 26 residual samples; the LP reference adds
+its own past-sample support. Global mean AND population standard deviation
+(variance floor 1e-8) yield 128 features, followed by dropout and linear 2-logit
+head. Neural parameter counts verified locally: single-order 5,446; multiscale
+5,518. Used LP coefficients: 198 versus 666 non-leading coefficients; the
+reference archive contains all three fitted orders for both arms for auditing.
+Do not compare neural-only counts to a baseline's combined preprocessing count.
+
+Training stages
+---------------
+Stage 1: nonoverlapping 100-sample residual windows (2 seconds). Discard partial
+training-window tails. Optimize class-weighted window cross-entropy using weights
+computed only from inner-training windows, AdamW, gradient norm clipping 1,
+batch size64, at most60 epochs. Each epoch, run the CNN on every full inner
+validation recording (without padding), pool mean/std features for that recording,
+average recording feature vectors equally within participant, then apply the head.
+Use unweighted participant log loss for stopping and scheduling, not window
+accuracy. Restore the best inner-validation checkpoint. Short-window training vs
+full-record validation is an intentional multilevel protocol, not identical input
+distributions. Stage 2 calibrates this distribution change.
+
+Stage 2: freeze the encoder; compute full-record embeddings for inner-training
+and inner-validation participants, average recordings equally, then retrain ONLY
+the head on one sample per inner-training participant with UNWEIGHTED CE. Keep
+dropout in the head. AdamW head LR=1e-3 fixed; reuse candidate weight decay so
+that it is a shared two-stage regularization choice (not an unreported search).
+Maximum40 epochs. Epoch-zero head is included as a candidate: if calibration
+worsens inner validation, keep the stage-1 checkpoint. Both stages use stopping
+patience10 and ReduceLROnPlateau patience4/factor0.5. No test head calibration.
+
+Fixed search and strict evaluation
+---------------------------------
+Default three candidate settings shared across arms: fixed reference LR5e-4,
+weight decay1e-3, dropout.25 plus two deterministic random draws with search seed
+9011; LR log-uniform1e-4..1e-3, weight decay1e-4..1e-2, dropout .1/.2/.25/.3.
+Select candidate by final inner-validation participant NLL after both stages;
+ties retain first candidate. Default 10 outer participant folds (split seed42),
+20% inner validation within outer development, and training seeds42,123,2026.
+Same folds/control references across arms and seeds; references are learned anew
+inside each fold and saved. All participants/recordings stay together. No external
+clinical metadata enters training or selection. Entire outer recordings are
+transformed only AFTER all candidates for that task have been selected.
+
+Final inference: encode full unpadded outer-test recordings; average feature
+vectors equally within participant; apply the selected head once per participant;
+PD iff probability>=0.5. This is FEATURE aggregation, not probability averaging.
+No scored-window metric is produced (window count=0 in compatibility metadata).
+All valid post-warmup samples can contribute at full-record inference; valid
+convolutions/max pooling can omit trailing samples according to stride.
+No refitting on outer development, no threshold search, no winner-only reporting.
+
+Budget and persistence
+----------------------
+2 arms *10 folds *3 seeds *3 candidates =180 TWO-STAGE fits; <=18,000 combined
+epochs before early stopping. Default chunk=2 completed tasks (one fold/both arms
+for one seed). Set max tasks=None for all remaining tasks. Repeated invocations
+resume completed tasks; interrupted task restarts. No automatic exports.
+Explicit JSON ZIP export allows completed-task continuation; data/source/runtime,
+plan, candidate selections, participant coverage and stored reference are checked.
+Weights are released after scoring. An export is a result/progress bundle, not
+a final deployment checkpoint. Resume with the exact pinned source/runtime.
+Times for test transform/encode/head exclude loading and precomputed downsampling;
+they are not end-to-end inference benchmarks. Equal candidates/epochs are not
+identical compute budgets. CPU is a real supported CNN backend; no Mamba kernels
+are required. Recommended training is Kaggle GPU.
+
+Outputs
+-------
+Separate participant OOF metrics and class-stratified bootstrap95% intervals for
+each arm/seed; fold SD descriptive only. Paired multiscale-minus-single differences
+resample the same participants across arms/seeds, average seed-specific metrics,
+and never treat repeated seeds as independent extra people. Conditional intervals
+do not include full model-refitting/split/external-population uncertainty.
+Clinical stage/study/error tables use the verified TXT/HTML exact-ID join after
+evaluation, with missing/conflicting values Unknown. Persistently wrong and
+seed-unstable participants, confidently wrong predictions and selected inner
+validation NLL contributors are included. Clinical subgroups are exploratory;
+small sample sizes and multiple comparisons limit conclusions.
+
+Keep this predeclared experiment separate from prior model searches on this same
+cohort. Nested splitting prevents direct test-driven selection, not researcher-
+level repeated reuse. A full inner-CV search or external validation could strengthen
+later work. No original LPGNet or historical accuracy is rerun or presented as a
+result here. No improvement is promised before the new experiments execute.
