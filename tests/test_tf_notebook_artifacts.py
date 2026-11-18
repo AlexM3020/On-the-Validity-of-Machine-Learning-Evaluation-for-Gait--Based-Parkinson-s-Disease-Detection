@@ -28,12 +28,16 @@ class TensorflowNotebookArtifactTests(unittest.TestCase):
                 self.assertIn('RUN_EXPERIMENT=False',text)
                 self.assertIn('MAX_NEW_TASKS=1',text)
                 self.assertIn('if EXPERIMENT_COMPLETE:',text)
-                self.assertIn('restore_checkpoint_bundle',text)
+                self.assertIn('connect_storage',text)
+                self.assertIn('DURABLE_MIRROR',text)
+                self.assertIn("RUN_PROFILE='efficient'",text)
+                self.assertIn("STORAGE_BACKEND='colab_drive'",text)
+                self.assertIn('REQUIRE_DURABLE_STORAGE=True',text)
                 self.assertNotIn('layers.Lambda',text)
                 self.assertNotIn('safe_mode=False',text)
                 revision=re.search(r"SOURCE_REV = '([a-f0-9]{40})'",text).group(1)
                 if (root/'.git').exists():
-                    for file in ('__init__.py','official_data.py','tf_notebook_support.py'):
+                    for file in ('__init__.py','official_data.py','tf_notebook_support.py','durable_storage.py'):
                         original=subprocess.run(['git','-C',str(root),'show',revision+':gait/'+file],capture_output=True,check=True).stdout
                         self.assertEqual((root/'gait'/file).read_bytes().replace(b'\r\n',b'\n'),original.replace(b'\r\n',b'\n'))
                 self.assertIn("COHORT_POLICY='official_all'" if name==NAMES[0] else "COHORT_POLICY='curated'",text)
