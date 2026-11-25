@@ -165,7 +165,8 @@ See [`CITATION.cff`](CITATION.cff). The anonymous manuscript citation is:
 ```bibtex
 @misc{anonymous2026evaluationvalidity,
   author = {{Anonymous}},
-  title  = {Beyond Participant-Disjoint Splits: Evaluation Validity for Gait-Based Parkinson's Disease Detection},
+  title  = {On the Validity of Machine Learning Evaluation for Gait-
+Based Parkinson’s Disease Detection},
   year   = {2026},
   note   = {Anonymous manuscript under review at Transactions on Machine Learning Research}
 }
