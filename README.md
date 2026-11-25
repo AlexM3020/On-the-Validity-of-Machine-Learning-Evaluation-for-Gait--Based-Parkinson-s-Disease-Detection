@@ -1,6 +1,6 @@
 # On the Validity of Machine Learning Evaluation for Gait-Based Parkinson’s Disease Detection
 
-Research code and retained outputs for the anonymous manuscript **“On the Validity of Machine Learning Evaluation for Gait-
+Research code and retained outputs for the manuscript **“On the Validity of Machine Learning Evaluation for Gait-
 Based Parkinson’s Disease Detection”**
 
 This repository studies a methodological question: **which information flows must remain independent of outer-test participants when evaluating gait-based Parkinson's disease (PD) classifiers?** Participant-disjoint folds are necessary but not sufficient. Data-dependent preprocessing and training control must also exclude outer-test information.
@@ -160,15 +160,15 @@ The suite covers participant splitting, duplicate handling, train-only normaliza
 
 ## Citation
 
-See [`CITATION.cff`](CITATION.cff). The anonymous manuscript citation is:
+See [`CITATION.cff`](CITATION.cff). The manuscript citation is:
 
 ```bibtex
 @misc{anonymous2026evaluationvalidity,
-  author = {{Anonymous}},
+  author = {{###}},
   title  = {On the Validity of Machine Learning Evaluation for Gait-
 Based Parkinson’s Disease Detection},
   year   = {2026},
-  note   = {Anonymous manuscript under review at Transactions on Machine Learning Research}
+  note   = {###}
 }
 ```
 
