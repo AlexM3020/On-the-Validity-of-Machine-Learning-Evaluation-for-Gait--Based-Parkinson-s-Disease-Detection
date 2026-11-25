@@ -30,7 +30,8 @@ class TensorflowNotebookArtifactTests(unittest.TestCase):
                 self.assertIn('if EXPERIMENT_COMPLETE:',text)
                 self.assertIn('connect_storage',text)
                 self.assertIn('DURABLE_MIRROR',text)
-                self.assertIn("RUN_PROFILE='efficient'",text)
+                expected_profile='full' if name==NAMES[0] else 'efficient'
+                self.assertIn(f"RUN_PROFILE='{expected_profile}'",text)
                 self.assertIn("STORAGE_BACKEND='colab_drive'",text)
                 self.assertIn('REQUIRE_DURABLE_STORAGE=True',text)
                 self.assertNotIn('layers.Lambda',text)
@@ -41,6 +42,15 @@ class TensorflowNotebookArtifactTests(unittest.TestCase):
                         original=subprocess.run(['git','-C',str(root),'show',revision+':gait/'+file],capture_output=True,check=True).stdout
                         self.assertEqual((root/'gait'/file).read_bytes().replace(b'\r\n',b'\n'),original.replace(b'\r\n',b'\n'))
                 self.assertIn("COHORT_POLICY='official_all'" if name==NAMES[0] else "COHORT_POLICY='curated'",text)
+                self.assertIn('On-the-Validity-of-Machine-Learning-Evaluation-for-Gait--Based-Parkinson-s-Disease-Detection.git',text)
+                self.assertNotIn('Subject-Independent-Evaluation-of-Mamba-for-Parkinson-s-Disease-Detection-from-Gait-Signals.git',text)
+                if name==NAMES[0]:
+                    self.assertIn('N_BOOT=1000',text)
+                    self.assertIn('BOOTSTRAP_SEED=2028',text)
+                    self.assertIn('PAIRED_BOOTSTRAP_SEED=2028',text)
+                    self.assertIn('default_rng(BOOTSTRAP_SEED)',text)
+                    self.assertNotIn('default_rng(2026)',text)
+                    self.assertIn("'N_BOOT','BOOTSTRAP_SEED','PAIRED_BOOTSTRAP_SEED'",text)
 
 
 if __name__=='__main__': unittest.main()

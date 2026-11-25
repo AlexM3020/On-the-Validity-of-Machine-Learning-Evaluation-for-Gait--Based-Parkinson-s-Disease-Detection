@@ -49,6 +49,8 @@ class NotebookTests(unittest.TestCase):
         self.assertIn("SAVE_RESULTS = False", full)
         self.assertIn("TRAINING_SEEDS = (42, 123, 2026)", full)
         self.assertIn("CANDIDATES_PER_FAMILY = 8", full)
+        self.assertIn("On-the-Validity-of-Machine-Learning-Evaluation-for-Gait--Based-Parkinson-s-Disease-Detection.git", full)
+        self.assertNotIn("Subject-Independent-Evaluation-of-Mamba-for-Parkinson-s-Disease-Detection-from-Gait-Signals.git", full)
         self.assertNotIn("plt.savefig", full)
         revision = re.search(r"SOURCE_REV = '([a-f0-9]{40})'", full).group(1)
         if (root / ".git").exists():

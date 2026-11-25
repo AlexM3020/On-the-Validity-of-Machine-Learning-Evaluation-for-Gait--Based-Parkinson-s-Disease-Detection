@@ -1,0 +1,11 @@
+# Verified core versions from the archived LPGNet factorial publication run.
+# Python 3.13.16. This is a core pin set, not a transitive lock file.
+tensorflow==2.21.0
+keras==3.13.2
+numpy==2.4.6
+scipy==1.16.3
+scikit-learn==1.6.1
+# Notebook/reporting dependencies retained as compatible ranges.
+pandas>=2,<4
+matplotlib>=3.8,<4
+seaborn>=0.13,<0.14

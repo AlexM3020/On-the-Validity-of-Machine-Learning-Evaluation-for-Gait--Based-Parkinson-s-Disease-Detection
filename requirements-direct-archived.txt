@@ -1,0 +1,8 @@
+# Verified core versions from the archived direct CNN/Mamba publication run.
+# Python 3.12.13; CUDA 12.8; Tesla T4. This is a core pin set, not a transitive lock file.
+# The CUDA-specific PyTorch wheel is available from the PyTorch CUDA 12.8 index.
+--extra-index-url https://download.pytorch.org/whl/cu128
+numpy==2.4.6
+torch==2.10.0+cu128
+scikit-learn==1.6.1
+mamba-ssm==2.3.2.post1
