@@ -1,6 +1,8 @@
 # TensorFlow notebook compatibility and checkpoint contract
 
-The three imported research notebooks are maintained as separate experiments:
+The LPGNet factorial notebook is the TensorFlow entry point for the current
+manuscript. Variant A and LP-ResMIL are retained as separate historical research
+experiments and are not sources of the manuscript's reported factorial results.
 
 * **LPGNet factorial leakage study:** explicitly contrasts global/local LP fitting
   and test/inner validation. The default `official_all` cohort retains all 306
@@ -47,11 +49,13 @@ batch size before a new run if required, never silently mid-run.
 ## Persistence
 
 `CHECKPOINT_DIR` is explicit, absolute and versioned (`keras3_v2`) to avoid
-accepting older CSV-only checkpoints. Before starting, point it to a persistent
-location if needed. Kaggle working storage and Colab `/content` survive a kernel
-restart but **not necessarily a runtime/session reset**. For Colab, mount Drive
-yourself and set a Drive path; for Kaggle, explicitly export/download the
-checkpoint ZIP and restore its directory for a later session.
+accepting older CSV-only checkpoints. Long training requires the verified
+off-runtime storage preflight in `DURABLE_RUNS.md`. Colab uses an authenticated
+Drive mount; Kaggle requires an authenticated rclone remote. Configure rclone
+separately using a secure credential mechanism; never put tokens into notebook
+cells or Git. `/kaggle/working` and Colab `/content` are not durable run stores.
+The same `RUN_ID` restores verified committed state onto fresh scratch storage;
+use a new `RUN_ID` for any changed scientific plan.
 
 Once `RUN_EXPERIMENT=True`, each completed epoch writes a full `.keras` model
 including optimizer state, with full history, LR/stopping counters, best epoch
@@ -82,10 +86,11 @@ No severity is inferred from filenames and no clinical field enters training.
 
 ## Verification and limits
 
-Real local tests use TensorFlow 2.20.0 / Keras 3.15.1 on Windows CPU: model building,
-backpropagation, safe serialization with optimizer state, valid-window padding
-invariance (including trainable BatchNorm), all-padded rejection, simulated epoch
-interruption/recovery, task integrity and a small fully nested training task.
-The notebook smoke check runs on the user's actual Kaggle/Colab environment.
-These checks are not completed GPU cohort experiments or guarantees for every
-preinstalled framework version. Pin/log the environment for a publication run.
+The archived factorial run records Python 3.13.16, TensorFlow 2.21.0, Keras
+3.13.2, NumPy 2.4.6, SciPy 1.16.3, and scikit-learn 1.6.1. The corresponding
+core pins are in `requirements-factorial-archived.txt`. Tests cover model
+building, backpropagation, safe serialization with optimizer state, valid-window
+padding invariance, all-padded rejection, simulated interruption/recovery, task
+integrity, and a small nested training task when TensorFlow is available.
+The notebook smoke check must also pass in the actual Kaggle/Colab environment.
+A local test or skip is not a completed GPU cohort experiment.

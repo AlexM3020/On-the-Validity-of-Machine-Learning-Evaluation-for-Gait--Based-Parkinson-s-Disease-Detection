@@ -167,8 +167,16 @@ External/study-held-out confirmation remains valuable. The larger inner search
 can overfit its 29-person validation sets; a full inner-CV search is a higher-cost
 extension. Report the number of candidates and complete search space transparently.
 
-No new classification results are shipped. Local validation uses synthetic
-selection tests and real CPU CNN forward/backward; actual Mamba CUDA and dataset
-training must be validated/run in Kaggle. The old baseline notebook remains
-recoverable in Git history; its removed working-tree copy is not restored.
-Baseline source remains for provenance, not as an undocumented release default.
+The completed publication run is retained in
+notebooks/pd-mamba-cnn-results/comparison_progress_20261116T204946297832Z.zip.
+It contains 60 complete family/fold/seed tasks and 480 candidate fits. On the
+curated 161-participant cohort, seed-mean participant accuracy is 75.98% for
+CNN and 73.50% for Mamba; seed-mean AUC is 0.824 and 0.820, respectively.
+These are direct-model references, not matched leaderboard comparisons with
+LPGNet. The result archive also retains the split manifest, source hashes,
+selected candidates, predictions, and environment metadata.
+
+Local validation uses synthetic selection tests and real CPU CNN
+forward/backward; a fresh Mamba CUDA run still requires the notebook's real
+GPU checks. Repeated training seeds do not create additional independent
+participants, and subgroup findings remain exploratory.

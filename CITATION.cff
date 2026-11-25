@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: If you use this software or its retained experimental outputs, please cite the associated anonymous manuscript.
+type: software
+title: "Beyond Participant-Disjoint Splits: Evaluation Validity for Gait-Based Parkinson's Disease Detection"
+authors:
+  - name: Anonymous
+abstract: >-
+  Research software for evaluating participant, preprocessing, and
+  training-control independence in gait-based Parkinson's disease detection,
+  including deterministic partition replay, an LPGNet factorial protocol
+  reconstruction, and separate participant-independent CNN and Mamba benchmarks.
+keywords:
+  - evaluation validity
+  - participant leakage
+  - gait classification
+  - Parkinson's disease
+  - reproducibility
+  - nested cross-validation
+preferred-citation:
+  type: unpublished
+  title: "Beyond Participant-Disjoint Splits: Evaluation Validity for Gait-Based Parkinson's Disease Detection"
+  authors:
+    - name: Anonymous
+  year: 2026
+  notes: Anonymous manuscript under review at Transactions on Machine Learning Research.

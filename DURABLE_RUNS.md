@@ -50,7 +50,7 @@ uploaded to GitHub by the training notebooks.
 
 ## Why tiny models can take many hours
 
-The previous factorial defaults were NOT four fits:
+The full factorial protocol used for the manuscript is NOT four fits:
 
 * 4 conditions x 10 outer folds = 40 two-stage fits = **80 training stages**.
 * Epoch ceilings 1,000 + 200 allow **48,000 total epochs** before early stopping.
@@ -69,10 +69,10 @@ accidental CPU research runs in the TensorFlow notebooks.
 
 | Profile | Factorial notebook | Variant A / ResMIL |
 |---|---|---|
-| `efficient` (default) | local/inner condition only, 10 folds | 1 seed, 3 candidates, 3 inner folds, 10 outer folds |
+| `efficient` | local/inner condition only, 10 folds | 1 seed, 3 candidates, 3 inner folds, 10 outer folds |
 | `factorial_fast` | all four conditions, lower epoch ceilings | not applicable |
 | `fixed` | local/inner only | one prespecified configuration, no redundant inner configuration contest; retain outer-development epoch selection and refit |
-| `full` | original four conditions, original epoch ceilings | previous candidate/seed and epoch budgets |
+| `full` (clean factorial notebook default) | manuscript's four conditions and original epoch ceilings | previous candidate/seed and epoch budgets |
 
 Efficient/fast/fixed ceilings are 100 encoder + 40 second-stage epochs, stopping
 patience 12 and plateau patience 5. Full retains 1,000/200 and 25/14. Early stopping
@@ -84,8 +84,9 @@ they are declared budget changes, not evidence of equivalence to a larger search
 **not a completed 2x2 factorial and not an exact LPGNet replication**. No missing
 condition contrasts are invented. Select `full` for the original compute protocol,
 or `factorial_fast` for all four conditions at the smaller declared budget.
-The original-all cohort option still retains known duplicate identities; select
-curated before freezing the plan when the target is identity-clean evaluation.
+The manuscript's factorial reconstruction uses `official_all`, which retains
+known duplicate identities. Selecting `curated` defines a different experiment
+and requires a new run ID; it must not be substituted into the reported plan.
 
 The PyTorch LPR notebook defaults to both extensions, ten folds, one seed and two
 candidates: **40 two-stage fits**, rather than 180. Its 60/40 epoch caps are unchanged.
