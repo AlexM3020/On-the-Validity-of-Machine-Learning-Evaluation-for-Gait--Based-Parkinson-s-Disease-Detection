@@ -1,6 +1,7 @@
-# Beyond Participant-Disjoint Splits: Evaluation Validity for Gait-Based Parkinson's Disease Detection
+# On the Validity of Machine Learning Evaluation for Gait-Based Parkinson’s Disease Detection
 
-Research code and retained outputs for the anonymous manuscript **“Beyond Participant-Disjoint Splits: Evaluation Validity for Gait-Based Parkinson's Disease Detection”**, under review at Transactions on Machine Learning Research (TMLR).
+Research code and retained outputs for the anonymous manuscript **“On the Validity of Machine Learning Evaluation for Gait-
+Based Parkinson’s Disease Detection”**
 
 This repository studies a methodological question: **which information flows must remain independent of outer-test participants when evaluating gait-based Parkinson's disease (PD) classifiers?** Participant-disjoint folds are necessary but not sufficient. Data-dependent preprocessing and training control must also exclude outer-test information.
 
