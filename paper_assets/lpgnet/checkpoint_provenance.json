@@ -1,0 +1,19 @@
+{
+  "complete_condition_fold_tasks": 40,
+  "exported_fields": [
+    "loss",
+    "val_loss"
+  ],
+  "history_stage": "recording",
+  "lstm_assets": {
+    "accuracy_curve_11.png": "c94b5092294511b27055be6ba028e8f7834db8e9606d5e76d009f811cc07da6d",
+    "classification_report_participant.csv": "0c7f25be8a5e6ff4e1c3246b6540bfdb84299734bff467d5ce3a82cb896dadef",
+    "classification_report_recording.csv": "5e9c46c3a1226c456637e15756db7f298f956c8a8a10753e67e7caab103f021d",
+    "loss_curve_11.png": "33e5d775d5d3aeadccd01bbd594f56f80540b0d3b9d6bd83d4c81a9dd8c17d8c"
+  },
+  "paired_comparisons_sha256": "0689e630ec38d4b1369c13a622d8e34dbf1edaddd2589cae97e6fcd2e97fec8b",
+  "run_plan_signature": "33293d01272a7db17317dabd8baa57119a0cd3ac8649290924b56a7d39da1143",
+  "schema": 1,
+  "source_bundle_sha256": "6dd3707b3af86c17cb25448b644e8ed54fd80a394d43c9d08a4fbad8834b591f",
+  "unique_payloads": 40
+}

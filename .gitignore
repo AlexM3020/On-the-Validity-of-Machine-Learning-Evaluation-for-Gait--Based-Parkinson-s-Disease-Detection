@@ -22,8 +22,12 @@ __pycache__/
 .idea/
 .vscode/
 outputs/
+generated_paper/
+.cache/
 .audit-test-*/
 *.pdf
 *.pptx
 *.png
+!paper_assets/**/*.pdf
+!paper_assets/**/*.png
 build/
